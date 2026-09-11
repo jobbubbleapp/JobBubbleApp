@@ -64,6 +64,52 @@ jobs:
           echo "Gradle project: $PROJECT_DIR"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Inject Google Maps API key
+        shell: bash
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GOOGLE_MAPS_API_KEY:-}" ]; then
+            echo 'Missing required GitHub Actions secret: GOOGLE_MAPS_API_KEY' >&2
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+
+          project = Path(os.environ['RUNNER_TEMP']) / 'jobbubble-project'
+          key = escape(os.environ['GOOGLE_MAPS_API_KEY'], {'"': '&quot;'})
+          manifests = list(project.rglob('src/main/AndroidManifest.xml'))
+          if not manifests:
+              raise SystemExit('No src/main/AndroidManifest.xml found in extracted project')
+
+          updated = 0
+          for manifest in manifests:
+              text = manifest.read_text(encoding='utf-8')
+              if 'com.google.android.geo.API_KEY' in text:
+                  pattern = re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)', re.DOTALL)
+                  new_text, count = pattern.subn(r'\1' + key + r'\2', text, count=1)
+                  if count == 0:
+                      raise SystemExit(f'Found Maps API metadata but could not replace value in {manifest}')
+              else:
+                  marker = '</application>'
+                  if marker not in text:
+                      continue
+                  metadata = f'        <meta-data android:name="com.google.android.geo.API_KEY" android:value="{key}" />\n'
+                  new_text = text.replace(marker, metadata + '    ' + marker, 1)
+              if new_text != text:
+                  manifest.write_text(new_text, encoding='utf-8')
+                  updated += 1
+
+          if updated == 0:
+              raise SystemExit('Could not inject Google Maps API key into any main manifest')
+          print(f'Google Maps API key injected into {updated} manifest(s).')
+          PY
+
       - name: Build debug APK
         shell: bash
         working-directory: ${{ steps.gradle_project.outputs.project_dir }}
