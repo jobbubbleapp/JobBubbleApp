@@ -1,0 +1,38 @@
+# Android / Gradle local configuration
+local.properties
+*.local.properties
+.gradle/
+**/build/
+
+# Signing credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Environment / secret files
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+secrets/
+private/
+credentials/
+
+# Google/Firebase private service credentials
+*service-account*.json
+*service_account*.json
+*credentials*.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Public project archives/APKs are intentionally NOT ignored because
+# JobBubble keeps downloadable project/build files in this public repository.
