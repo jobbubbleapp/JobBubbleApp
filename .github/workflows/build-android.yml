@@ -26,7 +26,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Locate newest JobBubble project ZIP
         id: project_zip
