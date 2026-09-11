@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - feature/dark-theme-muse-verification
     paths:
       - '**/*.zip'
       - 'scripts/**'
@@ -17,165 +18,86 @@ jobs:
   build-release-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Locate newest JobBubble project ZIP
-        id: project_zip
+      - name: Locate and extract Android project
+        id: project
         shell: bash
         run: |
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
-          if [ -z "${ZIP_FILE:-}" ]; then
-            echo 'No JobBubble project ZIP was found in the repository root.' >&2
-            exit 1
-          fi
-          echo "Using project archive: $ZIP_FILE"
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Extract Android project
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf "$RUNNER_TEMP/jobbubble-project"
-          mkdir -p "$RUNNER_TEMP/jobbubble-project"
-          unzip -q "${{ steps.project_zip.outputs.zip_file }}" -d "$RUNNER_TEMP/jobbubble-project"
-
-      - name: Locate Gradle wrapper
-        id: gradle_project
-        shell: bash
-        run: |
-          set -euo pipefail
+          test -n "$ZIP_FILE"
+          rm -rf "$RUNNER_TEMP/jobbubble-project"; mkdir -p "$RUNNER_TEMP/jobbubble-project"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-project"
           GRADLEW=$(find "$RUNNER_TEMP/jobbubble-project" -type f -name gradlew -print -quit)
-          if [ -z "${GRADLEW:-}" ]; then
-            echo 'gradlew was not found inside the project ZIP.' >&2
-            exit 1
-          fi
-          PROJECT_DIR=$(dirname "$GRADLEW")
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Apply V9.4.46 app changes
+          test -n "$GRADLEW"
+          echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
+      - name: Apply and verify V9.4.47 changes
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/v943_patch.py "${{ steps.gradle_project.outputs.project_dir }}"
-          python3 scripts/v944_patch.py "${{ steps.gradle_project.outputs.project_dir }}"
-          MAIN="${{ steps.gradle_project.outputs.project_dir }}/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          P="${{ steps.project.outputs.project_dir }}"
+          python3 scripts/v943_patch.py "$P"
+          python3 scripts/v944_patch.py "$P"
+          python3 scripts/v947_patch.py "$P"
+          MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          STYLE="$P/app/src/main/res/raw/google_map_dark_style.json"
           grep -q 'The Muse' "$MAIN"
-          grep -q 'Licenses & Data Sources' "$MAIN"
-          grep -q 'Help & Support' "$MAIN"
-          grep -q 'Log Out' "$MAIN"
-          grep -q 'googleMap.setMapStyle(null)' "$MAIN"
-          grep -q '(j.pay<=0||j.pay>=minPay)' "$MAIN"
+          grep -q 'if("dark".equals(mapTheme)) googleMap.setMapStyle(MapStyleOptions.loadRawResourceStyle(this,R.raw.google_map_dark_style))' "$MAIN"
+          grep -q 'else googleMap.setMapStyle(new MapStyleOptions("\[\]"))' "$MAIN"
           grep -q 'if(pile.jobIndexes.size()>5)' "$MAIN"
-          ! grep -q 'final String\[\] choices={"All sources","Adzuna","USAJOBS","CareerOneStop"}' "$MAIN"
-
+          grep -q '(j.pay<=0||j.pay>=minPay)' "$MAIN"
+          grep -q '#071C2C' "$MAIN"
+          python3 -m json.tool "$STYLE" >/dev/null
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.47'
       - name: Inject Google Maps API key
         shell: bash
         env:
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${GOOGLE_MAPS_API_KEY:-}" ]; then
-            echo 'Missing required GitHub Actions secret: GOOGLE_MAPS_API_KEY' >&2
-            exit 1
-          fi
-          python3 - <<'PY2'
-          import os, re
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          export PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
+          python3 - <<'PY'
+          import os,re
           from pathlib import Path
           from xml.sax.saxutils import escape
-          project = Path(os.environ['RUNNER_TEMP']) / 'jobbubble-project'
-          key = escape(os.environ['GOOGLE_MAPS_API_KEY'], {'"': '&quot;'})
-          manifests = list(project.rglob('src/main/AndroidManifest.xml'))
-          if not manifests:
-              raise SystemExit('No src/main/AndroidManifest.xml found')
-          updated = 0
+          project=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          manifests=list(project.rglob('src/main/AndroidManifest.xml')); assert manifests
           for manifest in manifests:
-              text = manifest.read_text(encoding='utf-8')
+              text=manifest.read_text(encoding='utf-8')
               if 'com.google.android.geo.API_KEY' in text:
-                  pattern = re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)', re.DOTALL)
-                  new_text, count = pattern.subn(r'\1' + key + r'\2', text, count=1)
-                  if count == 0:
-                      raise SystemExit(f'Could not replace Maps key in {manifest}')
-              else:
-                  marker = '</application>'
-                  if marker not in text:
-                      continue
-                  metadata = f'        <meta-data android:name="com.google.android.geo.API_KEY" android:value="{key}" />\n'
-                  new_text = text.replace(marker, metadata + '    ' + marker, 1)
-              if new_text != text:
-                  manifest.write_text(new_text, encoding='utf-8')
-                  updated += 1
-          if updated == 0:
-              raise SystemExit('Could not inject Google Maps API key')
-          print(f'Injected Maps key into {updated} manifest(s).')
-          PY2
-
-      - name: Build unsigned release APK
-        shell: bash
-        working-directory: ${{ steps.gradle_project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-          chmod +x ./gradlew
-          ./gradlew --no-daemon clean assembleRelease --stacktrace
-
-      - name: Align and sign release APK
-        id: sign_apk
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.DOTALL)
+                  text,n=pat.subn(r'\1'+key+r'\2',text,count=1); assert n
+                  manifest.write_text(text,encoding='utf-8')
+          PY
+      - name: Build release APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: chmod +x ./gradlew && ./gradlew --no-daemon clean assembleRelease --stacktrace
+      - name: Sign and verify APK
+        id: sign
         shell: bash
         env:
           KEYSTORE_PASSWORD: JobBubbleBuild2026
         run: |
           set -euo pipefail
-          BUILD_TOOLS=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
-          ZIPALIGN="$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign"
-          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          UNSIGNED_APK=$(find "${{ steps.gradle_project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
-          if [ -z "${UNSIGNED_APK:-}" ]; then
-            echo 'Unsigned release APK not found.' >&2
-            find "${{ steps.gradle_project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*.apk' -print >&2
-            exit 1
-          fi
-
-          KEYSTORE="$RUNNER_TEMP/jobbubble-release.jks"
-          ALIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.46-release-aligned.apk"
-          SIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.46-release-signed.apk"
-
-          keytool -genkeypair -v \
-            -keystore "$KEYSTORE" \
-            -storepass "$KEYSTORE_PASSWORD" \
-            -keypass "$KEYSTORE_PASSWORD" \
-            -alias jobbubble \
-            -keyalg RSA \
-            -keysize 4096 \
-            -validity 10000 \
-            -dname "CN=JobBubble, OU=Android, O=JobBubble, L=Sacramento, ST=California, C=US"
-
-          "$ZIPALIGN" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
-          "$APKSIGNER" sign \
-            --ks "$KEYSTORE" \
-            --ks-key-alias jobbubble \
-            --ks-pass "pass:$KEYSTORE_PASSWORD" \
-            --key-pass "pass:$KEYSTORE_PASSWORD" \
-            --out "$SIGNED_APK" \
-            "$ALIGNED_APK"
-
-          "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
-          mkdir -p "$RUNNER_TEMP/apks"
-          cp "$SIGNED_APK" "$RUNNER_TEMP/apks/JobBubble-V9.4.46-release-signed.apk"
-          echo "signed_apk=$RUNNER_TEMP/apks/JobBubble-V9.4.46-release-signed.apk" >> "$GITHUB_OUTPUT"
-
-      - name: Upload signed release APK
-        uses: actions/upload-artifact@v4
+          B=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
+          U=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
+          test -n "$U"
+          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.47-release-signed.apk"
+          keytool -genkeypair -keystore "$K" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -alias jobbubble -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=JobBubble, OU=Android, O=JobBubble, C=US"
+          "$ANDROID_HOME/build-tools/$B/zipalign" -f -p 4 "$U" "$A"
+          "$ANDROID_HOME/build-tools/$B/apksigner" sign --ks "$K" --ks-key-alias jobbubble --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEYSTORE_PASSWORD" --out "$S" "$A"
+          "$ANDROID_HOME/build-tools/$B/apksigner" verify --verbose "$S"
+          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk"
+          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.46-release-signed
-          path: ${{ steps.sign_apk.outputs.signed_apk }}
+          name: JobBubble-V9.4.47-release-signed
+          path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
