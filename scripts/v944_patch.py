@@ -20,19 +20,27 @@ s = s.replace('        box.addView(infoCard("CareerOneStop / NLx","U.S. Departme
 s = s.replace('final String[] choices={"All sources","Adzuna","USAJOBS","CareerOneStop"};', 'final String[] choices={"All sources","Adzuna","USAJOBS","The Muse"};')
 s = s.replace('choice.equals("USAJOBS")?"Federal government jobs":"CareerOneStop / NLx listings";', 'choice.equals("USAJOBS")?"Federal government jobs":"Private-sector jobs from The Muse";')
 
-# V9.4.45: The Muse does not consistently provide salary data. Unknown salary must not
-# be treated as $0 and silently removed by JobBubble's minimum-pay filter. Jobs with a
-# known salary still respect the user's minimum-pay setting; jobs with no salary remain
-# visible and can show their pay as unavailable/not listed.
+# V9.4.45: unknown salary must not be treated as $0 and filtered out.
 old_filter = 'boolean ok=d<=maxDistanceMiles&&j.pay>=minPay&&(source.equals("All sources")||j.source.equalsIgnoreCase(source))&&(category.equals("All jobs")||j.category.equalsIgnoreCase(category))&&(!preciseLocationsOnly||hasPreciseLocation(j));'
 new_filter = 'boolean ok=d<=maxDistanceMiles&&(j.pay<=0||j.pay>=minPay)&&(source.equals("All sources")||j.source.equalsIgnoreCase(source))&&(category.equals("All jobs")||j.category.equalsIgnoreCase(category))&&(!preciseLocationsOnly||hasPreciseLocation(j));'
-if old_filter not in s:
+if old_filter in s:
+    s = s.replace(old_filter, new_filter, 1)
+elif new_filter not in s:
     raise SystemExit('Salary filter patch target not found')
-s = s.replace(old_filter, new_filter, 1)
+
+# V9.4.46: large clusters represent multiple jobs, especially Muse jobs that share
+# an approximate city-level coordinate. Tapping a cluster of more than five jobs should
+# always open the scrollable job list immediately instead of repeatedly zooming in first.
+old_cluster = 'if(pile.jobIndexes.size()>5 && zoom>=16.8f){\n                    showClusterSideList(pile);'
+new_cluster = 'if(pile.jobIndexes.size()>5){\n                    showClusterSideList(pile);'
+if old_cluster in s:
+    s = s.replace(old_cluster, new_cluster, 1)
+elif new_cluster not in s:
+    raise SystemExit('Large-cluster click patch target not found')
 
 # Version bump.
 if version.exists():
-    version.write_text('9.4.45\n', encoding='utf-8')
+    version.write_text('9.4.46\n', encoding='utf-8')
 
 java.write_text(s, encoding='utf-8')
-print('Applied JobBubble V9.4.45 Muse salary-visibility fix')
+print('Applied JobBubble V9.4.46 Muse cluster-list fix')
