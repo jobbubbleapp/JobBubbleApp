@@ -1,0 +1,10 @@
+# JobBubble Android local configuration example
+# Copy to local.properties for local builds. local.properties is ignored by Git.
+# Do not commit real credentials.
+
+sdk.dir=/path/to/your/Android/Sdk
+
+# The official GitHub build obtains the Maps credential from the
+# GOOGLE_MAPS_API_KEY GitHub Actions secret and injects it during CI.
+# Developers should use their own restricted Google Maps key for local builds.
+GOOGLE_MAPS_API_KEY=YOUR_OWN_RESTRICTED_GOOGLE_MAPS_API_KEY
