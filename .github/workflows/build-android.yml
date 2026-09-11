@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - '**/*.zip'
+      - 'scripts/**'
       - '.github/workflows/build-android.yml'
 
 permissions:
@@ -60,6 +61,14 @@ jobs:
           fi
           PROJECT_DIR=$(dirname "$GRADLEW")
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Apply V9.4.42 app changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v942_patch.py "${{ steps.gradle_project.outputs.project_dir }}"
+          grep -q 'CareerOneStop' "${{ steps.gradle_project.outputs.project_dir }}/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -q 'CareerOneStop' "${{ steps.gradle_project.outputs.project_dir }}/app/src/main/res/layout/activity_main.xml"
 
       - name: Inject Google Maps API key
         shell: bash
@@ -128,8 +137,8 @@ jobs:
           fi
 
           KEYSTORE="$RUNNER_TEMP/jobbubble-release.jks"
-          ALIGNED_APK="$RUNNER_TEMP/JobBubble-release-aligned.apk"
-          SIGNED_APK="$RUNNER_TEMP/JobBubble-release-signed.apk"
+          ALIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.42-release-aligned.apk"
+          SIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.42-release-signed.apk"
 
           keytool -genkeypair -v \
             -keystore "$KEYSTORE" \
@@ -152,13 +161,13 @@ jobs:
 
           "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
           mkdir -p "$RUNNER_TEMP/apks"
-          cp "$SIGNED_APK" "$RUNNER_TEMP/apks/JobBubble-release-signed.apk"
-          echo "signed_apk=$RUNNER_TEMP/apks/JobBubble-release-signed.apk" >> "$GITHUB_OUTPUT"
+          cp "$SIGNED_APK" "$RUNNER_TEMP/apks/JobBubble-V9.4.42-release-signed.apk"
+          echo "signed_apk=$RUNNER_TEMP/apks/JobBubble-V9.4.42-release-signed.apk" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-release-signed
+          name: JobBubble-V9.4.42-release-signed
           path: ${{ steps.sign_apk.outputs.signed_apk }}
           if-no-files-found: error
           retention-days: 30
