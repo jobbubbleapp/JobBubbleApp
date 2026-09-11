@@ -18,10 +18,10 @@ jobs:
           rm -rf /tmp/jb && mkdir -p /tmp/jb
           unzip -q "$ZIP_FILE" -d /tmp/jb
           MAIN=$(find /tmp/jb -type f -path '*/app/src/main/java/com/jobbubble/app/MainActivity.java' -print -quit)
-          python3 scripts/v943_patch.py "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$MAIN")")")")")")" || true
-          ROOT=$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$MAIN")")")")")")
-          python3 scripts/v944_patch.py "$ROOT" || true
+          ROOT=${MAIN%/app/src/main/java/com/jobbubble/app/MainActivity.java}
+          python3 scripts/v943_patch.py "$ROOT"
+          python3 scripts/v944_patch.py "$ROOT"
           echo '=== filter/pay/source lines ==='
-          grep -nE 'minPay|source.equals|salary|pay<=0|j\.pay|sourceApiValue|The Muse|themuse|location_refining|jobs\.add|MAX|slice|subList' "$MAIN" | head -n 240
+          grep -nE 'minPay|source.equals|salary|pay<=0|j\.pay|sourceApiValue|The Muse|themuse|location_refining|jobs\.add|MAX|slice|subList' "$MAIN" | head -n 260
           echo '=== load/render methods ==='
-          grep -nE 'void loadJobs|loadJobs\(|render|addJob|draw|Marker|cluster|filtered|visibleJobs|showJobs' "$MAIN" | head -n 240
+          grep -nE 'void loadJobs|loadJobs\(|render|addJob|draw|Marker|cluster|filtered|visibleJobs|showJobs' "$MAIN" | head -n 260
