@@ -1,0 +1,27 @@
+name: Inspect Job Display Logic
+
+on:
+  push:
+    paths:
+      - '.github/workflows/inspect-job-display.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect MainActivity job filtering and display
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf /tmp/jb && mkdir -p /tmp/jb
+          unzip -q "$ZIP_FILE" -d /tmp/jb
+          MAIN=$(find /tmp/jb -type f -path '*/app/src/main/java/com/jobbubble/app/MainActivity.java' -print -quit)
+          python3 scripts/v943_patch.py "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$MAIN")")")")")")" || true
+          ROOT=$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$MAIN")")")")")")
+          python3 scripts/v944_patch.py "$ROOT" || true
+          echo '=== filter/pay/source lines ==='
+          grep -nE 'minPay|source.equals|salary|pay<=0|j\.pay|sourceApiValue|The Muse|themuse|location_refining|jobs\.add|MAX|slice|subList' "$MAIN" | head -n 240
+          echo '=== load/render methods ==='
+          grep -nE 'void loadJobs|loadJobs\(|render|addJob|draw|Marker|cluster|filtered|visibleJobs|showJobs' "$MAIN" | head -n 240
