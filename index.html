@@ -3,120 +3,85 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>JobBubble</title>
+  <meta name="description" content="JobBubble is a U.S.-focused Android job search app that helps people discover real job opportunities on an interactive map and job list." />
+  <meta name="robots" content="index,follow" />
+  <title>JobBubble | Real jobs. Real opportunities.</title>
   <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: #f5f3fb;
-      color: #222;
-    }
-
-    header {
-      padding: 60px 20px;
-      text-align: center;
-      background: linear-gradient(135deg, #7b2cff, #b36cff);
-      color: white;
-    }
-
-    h1 {
-      font-size: 48px;
-      margin: 0 0 10px;
-    }
-
-    .tagline {
-      font-size: 20px;
-      opacity: 0.95;
-    }
-
-    main {
-      max-width: 850px;
-      margin: auto;
-      padding: 40px 20px;
-    }
-
-    section {
-      background: white;
-      padding: 28px;
-      margin-bottom: 24px;
-      border-radius: 18px;
-      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
-    }
-
-    h2 {
-      color: #6f2bd8;
-    }
-
-    footer {
-      text-align: center;
-      padding: 30px;
-      color: #666;
-    }
+    :root{--purple:#7c32e6;--purple2:#a95cf5;--ink:#1f2430;--muted:#626b78;--surface:#ffffff;--bg:#f6f4fb;--line:#e4dfef}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55}
+    .wrap{max-width:1050px;margin:auto;padding:0 22px}
+    header{background:linear-gradient(135deg,var(--purple),var(--purple2));color:#fff;padding:78px 0 72px}
+    .brand{font-size:52px;font-weight:800;letter-spacing:-1.5px;margin:0}
+    .tagline{font-size:22px;font-weight:700;margin-top:4px}
+    .hero-copy{max-width:720px;font-size:18px;margin-top:22px;opacity:.96}
+    .badge{display:inline-block;margin-top:18px;padding:8px 13px;border-radius:999px;background:rgba(255,255,255,.16);font-size:13px;font-weight:700}
+    main{padding:42px 0 54px}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+    section{background:var(--surface);padding:28px;border:1px solid var(--line);border-radius:18px;box-shadow:0 7px 24px rgba(42,28,80,.06)}
+    section.full{grid-column:1/-1}
+    h2{margin:0 0 10px;color:#5f24be;font-size:22px}
+    p{margin:8px 0;color:#353b46}
+    ul{margin:12px 0 0;padding-left:20px;color:#353b46}
+    li{margin:7px 0}
+    .sources{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+    .source{padding:8px 11px;border-radius:999px;background:#f1ecfb;border:1px solid #dfd1f8;font-size:13px;font-weight:700;color:#4f258f}
+    footer{border-top:1px solid var(--line);padding:28px 0 40px;color:var(--muted);font-size:14px}
+    a{color:#5f24be}
+    @media(max-width:720px){.brand{font-size:42px}.tagline{font-size:19px}.grid{grid-template-columns:1fr}section.full{grid-column:auto}header{padding:58px 0 54px}}
   </style>
 </head>
 <body>
-
 <header>
-  <h1>JobBubble</h1>
-  <div class="tagline">Real jobs. Real opportunities.</div>
+  <div class="wrap">
+    <h1 class="brand">JobBubble</h1>
+    <div class="tagline">Real jobs. Real opportunities.</div>
+    <div class="hero-copy">JobBubble is a U.S.-focused Android job-search application built to make nearby opportunities easier to discover. Jobs are presented on an interactive map and in a traditional list so users can understand both the role and where it is located.</div>
+    <div class="badge">Android app • United States • In active development</div>
+  </div>
 </header>
 
-<main>
+<main class="wrap">
+  <div class="grid">
+    <section>
+      <h2>What JobBubble does</h2>
+      <p>Users can search current job opportunities by location, distance, pay, category and source. JobBubble also uses profile information such as degrees, licenses and certifications to make job requirements easier to understand.</p>
+    </section>
 
-  <section>
-    <h2>About JobBubble</h2>
-    <p>
-      JobBubble is an Android job-discovery application designed to help
-      people find nearby employment opportunities using an interactive map.
-    </p>
-    <p>
-      Users can explore jobs by location, distance, pay, job type, and source.
-    </p>
-  </section>
+    <section>
+      <h2>How jobs are displayed</h2>
+      <p>Listings appear as map bubbles and in a job list. When a user chooses a role, JobBubble shows the available job details and directs the user to the original employer or authorized provider page to apply.</p>
+    </section>
 
-  <section>
-    <h2>How It Works</h2>
-    <p>
-      JobBubble displays available job opportunities geographically so users
-      can quickly understand where jobs are located and discover opportunities
-      near them.
-    </p>
-  </section>
+    <section class="full">
+      <h2>Job data sources</h2>
+      <p>JobBubble is designed to combine authorized job-data providers into one search experience. Each provider remains the source of its own listings, and JobBubble preserves source attribution and links to the original posting where required.</p>
+      <div class="sources">
+        <span class="source">Adzuna</span>
+        <span class="source">USAJOBS</span>
+        <span class="source">Additional approved providers as enabled</span>
+      </div>
+    </section>
 
-  <section>
-    <h2>Job Data</h2>
-    <p>
-      JobBubble may display job listings supplied by approved job-data
-      providers and other authorized sources. Users may be directed to the
-      original provider or employer website to complete an application.
-    </p>
-  </section>
+    <section>
+      <h2>Location and map experience</h2>
+      <p>JobBubble uses map and geocoding services to place job opportunities as accurately as the available listing information permits. If an exact workplace address is unavailable, the app can show an approximate area and refine it when better information is found.</p>
+    </section>
 
-  <section>
-    <h2>Privacy</h2>
-    <p>
-      JobBubble may use device location when permission is granted in order to
-      show jobs near the user. Location information is used for job-search
-      functionality.
-    </p>
-    <p>
-      JobBubble does not sell personal information.
-    </p>
-  </section>
+    <section>
+      <h2>Privacy</h2>
+      <p>Device location is used only when permission is granted and is used to support nearby job searching and distance calculations. JobBubble does not sell personal information.</p>
+    </section>
 
-  <section>
-    <h2>Contact</h2>
-    <p>
-      For business, partnership, or support inquiries, contact the JobBubble
-      development team.
-    </p>
-  </section>
-
+    <section class="full">
+      <h2>Project status</h2>
+      <p>JobBubble is currently in active development and preparing for broader public availability. The project is focused on U.S. job discovery, clear source attribution, useful filtering, and a straightforward path from discovery to the original job application.</p>
+    </section>
+  </div>
 </main>
 
 <footer>
-  © 2026 JobBubble
+  <div class="wrap">© 2026 JobBubble. Job listing names, logos and data remain the property of their respective providers and employers.</div>
 </footer>
-
 </body>
 </html>
