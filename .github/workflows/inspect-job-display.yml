@@ -2,6 +2,7 @@ name: Inspect Job Display Logic
 
 on:
   push:
+    branches: [ feature/dark-theme-muse-verification ]
     paths:
       - '.github/workflows/inspect-job-display.yml'
 
@@ -10,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect MainActivity job filtering and display
+      - name: Inspect Muse loading, filtering and display path
         shell: bash
         run: |
           set -euo pipefail
@@ -21,9 +22,14 @@ jobs:
           ROOT=${MAIN%/app/src/main/java/com/jobbubble/app/MainActivity.java}
           python3 scripts/v943_patch.py "$ROOT"
           python3 scripts/v944_patch.py "$ROOT"
-          echo '=== marker click ==='
-          sed -n '285,325p' "$MAIN"
-          echo '=== pile builder ==='
-          sed -n '1870,1950p' "$MAIN"
-          echo '=== progressive pile ==='
-          sed -n '2015,2095p' "$MAIN"
+          python3 scripts/v947_patch.py "$ROOT"
+          echo '=== Muse/source/refining references ==='
+          grep -n -E -C 8 'refining|The Muse|themuse|sourceParam|normalizeSource' "$MAIN" || true
+          echo '=== loadJobs references ==='
+          grep -n -E -C 30 'void loadJobs|loadJobs\(' "$MAIN" || true
+          echo '=== JSON response parsing ==='
+          grep -n -E -C 25 'getJSONArray\("jobs"\)|optJSONArray\("jobs"\)|JSONArray.*jobs|JSONObject.*job' "$MAIN" || true
+          echo '=== filtering/visible jobs ==='
+          grep -n -E -C 20 'visibleJobs|boolean ok=d<=|preciseLocationsOnly|minPay' "$MAIN" || true
+          echo '=== rendering/piles ==='
+          grep -n -E -C 18 'buildPiles|renderJobs|showClusterSideList|jobIndexes' "$MAIN" || true
