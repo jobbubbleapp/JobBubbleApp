@@ -21,7 +21,9 @@ jobs:
           ROOT=${MAIN%/app/src/main/java/com/jobbubble/app/MainActivity.java}
           python3 scripts/v943_patch.py "$ROOT"
           python3 scripts/v944_patch.py "$ROOT"
-          echo '=== filter/pay/source lines ==='
-          grep -nE 'minPay|source.equals|salary|pay<=0|j\.pay|sourceApiValue|The Muse|themuse|location_refining|jobs\.add|MAX|slice|subList' "$MAIN" | head -n 260
-          echo '=== load/render methods ==='
-          grep -nE 'void loadJobs|loadJobs\(|render|addJob|draw|Marker|cluster|filtered|visibleJobs|showJobs' "$MAIN" | head -n 260
+          echo '=== load jobs block ==='
+          sed -n '1490,1675p' "$MAIN"
+          echo '=== filter/render block ==='
+          sed -n '1788,1875p' "$MAIN"
+          echo '=== job parser ==='
+          sed -n '2995,3020p' "$MAIN"
