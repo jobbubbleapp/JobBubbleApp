@@ -24,12 +24,46 @@ jobs:
           python3 scripts/v944_patch.py "$ROOT"
           python3 scripts/v947_patch.py "$ROOT"
           echo '=== Muse/source/refining references ==='
-          grep -n -E -C 8 'refining|The Muse|themuse|sourceParam|normalizeSource' "$MAIN" || true
-          echo '=== loadJobs references ==='
-          grep -n -E -C 30 'void loadJobs|loadJobs\(' "$MAIN" || true
-          echo '=== JSON response parsing ==='
-          grep -n -E -C 25 'getJSONArray\("jobs"\)|optJSONArray\("jobs"\)|JSONArray.*jobs|JSONObject.*job' "$MAIN" || true
+          grep -n -E -C 10 'refining|location_refining|The Muse|themuse|sourceParam|normalizeSource|requestRefinedJobs' "$MAIN" || true
+          echo '=== loadJobs and request construction ==='
+          grep -n -E -C 35 'void loadJobs|loadJobs\(|/jobs|radius|distance|savedLocation' "$MAIN" || true
+          echo '=== JSON parsing and coordinates ==='
+          grep -n -E -C 30 'getJSONArray\("jobs"\)|optJSONArray\("jobs"\)|latitude|longitude|lat|lng|lon' "$MAIN" || true
           echo '=== filtering/visible jobs ==='
-          grep -n -E -C 20 'visibleJobs|boolean ok=d<=|preciseLocationsOnly|minPay' "$MAIN" || true
+          grep -n -E -C 30 'visibleJobs|boolean ok=d<=|preciseLocationsOnly|minPay|distanceMiles|haversine|distanceBetween' "$MAIN" || true
           echo '=== rendering/piles ==='
-          grep -n -E -C 18 'buildPiles|renderJobs|showClusterSideList|jobIndexes' "$MAIN" || true
+          grep -n -E -C 20 'buildPiles|renderJobs|showClusterSideList|jobIndexes' "$MAIN" || true
+          echo '=== LIVE MUSE BACKEND RESPONSE ==='
+          python3 - <<'PY'
+          import json, urllib.parse, urllib.request, time, math
+          base='https://jobbubble-backend-1.onrender.com/jobs'
+          params={'location':'Everett, WA','radius':'100','source':'themuse'}
+          url=base+'?'+urllib.parse.urlencode(params)
+          def fetch():
+              with urllib.request.urlopen(url, timeout=90) as r:
+                  return json.load(r)
+          data=fetch()
+          print('initial_count=',len(data.get('jobs',[])),'refining=',data.get('refining'),'location_refining=',data.get('location_refining'))
+          if data.get('refining') or data.get('location_refining'):
+              time.sleep(4)
+              data=fetch()
+              print('refined_count=',len(data.get('jobs',[])),'refining=',data.get('refining'),'location_refining=',data.get('location_refining'))
+          jobs=data.get('jobs',[])
+          muse=[j for j in jobs if str(j.get('source','')).lower().replace(' ','') in ('themuse','muse')]
+          print('muse_count=',len(muse))
+          located=[]
+          for j in muse:
+              lat=j.get('lat',j.get('latitude')); lon=j.get('lng',j.get('lon',j.get('longitude')))
+              try:
+                  lat=float(lat); lon=float(lon)
+                  if -90<=lat<=90 and -180<=lon<=180: located.append((j,lat,lon))
+              except: pass
+          print('valid_coordinate_count=',len(located))
+          for j,lat,lon in located[:20]:
+              print('JOB',repr(j.get('title')),'location=',repr(j.get('location')),'lat=',lat,'lon=',lon,'source=',repr(j.get('source')))
+          if len(muse)<2:
+              raise SystemExit('FAIL: live backend returned fewer than 2 Muse jobs')
+          if len(located)<2:
+              raise SystemExit('FAIL: fewer than 2 Muse jobs have usable coordinates')
+          print('PASS: live backend currently supplies multiple Muse jobs with usable coordinates')
+          PY
