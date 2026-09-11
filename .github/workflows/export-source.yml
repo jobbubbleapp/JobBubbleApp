@@ -1,0 +1,42 @@
+name: Export JobBubble Source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/export-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find latest project ZIP
+        id: zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          test -n "$ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p extracted
+          unzip -q "${{ steps.zip.outputs.zip_file }}" -d extracted
+          find extracted -maxdepth 3 -type f | sort | head -100
+
+      - name: Upload extracted source
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobBubble-extracted-source
+          path: extracted
+          retention-days: 7
