@@ -21,9 +21,9 @@ jobs:
           ROOT=${MAIN%/app/src/main/java/com/jobbubble/app/MainActivity.java}
           python3 scripts/v943_patch.py "$ROOT"
           python3 scripts/v944_patch.py "$ROOT"
-          echo '=== load jobs block ==='
-          sed -n '1490,1675p' "$MAIN"
-          echo '=== filter/render block ==='
-          sed -n '1788,1875p' "$MAIN"
-          echo '=== job parser ==='
-          sed -n '2995,3020p' "$MAIN"
+          echo '=== marker click ==='
+          sed -n '285,325p' "$MAIN"
+          echo '=== pile builder ==='
+          sed -n '1870,1950p' "$MAIN"
+          echo '=== progressive pile ==='
+          sed -n '2015,2095p' "$MAIN"
