@@ -23,6 +23,7 @@ steps = [
     'v956_unknown_pay_detail_label.py',
     'v957_logo_category_fallback.py',
     'v958_meaningful_category_icons.py',
+    'v959_visible_vector_fallback.py',
 ]
 
 for script in steps:
