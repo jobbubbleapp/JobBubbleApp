@@ -1,0 +1,52 @@
+name: Audit JobBubble Android Lint
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ feature/dark-theme-muse-verification ]
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/lint-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lint-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Extract and patch project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb" && mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/v943_patch.py "$P"
+          python3 scripts/v944_patch.py "$P"
+          python3 scripts/v947_patch.py "$P"
+          python3 scripts/v948_cleanup.py "$P"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+      - name: Run lint and print complete text report
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set +e
+          chmod +x gradlew
+          ./gradlew --no-daemon lintRelease
+          REPORT=app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt
+          if [ -f "$REPORT" ]; then
+            echo '===== LINT REPORT START ====='
+            cat "$REPORT"
+            echo '===== LINT REPORT END ====='
+          fi
+          exit 0
