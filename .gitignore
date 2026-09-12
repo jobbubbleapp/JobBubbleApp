@@ -4,6 +4,10 @@ local.properties
 .gradle/
 **/build/
 
+# Generated Android binaries belong in CI artifacts/releases, not source control.
+*.apk
+*.aab
+
 # Signing credentials
 *.jks
 *.keystore
@@ -34,5 +38,4 @@ credentials/
 .DS_Store
 Thumbs.db
 
-# Public project archives/APKs are intentionally NOT ignored because
-# JobBubble keeps downloadable project/build files in this public repository.
+# The current source ZIP is intentionally versioned as the reproducible base used by CI.
