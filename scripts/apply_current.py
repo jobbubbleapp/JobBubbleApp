@@ -14,6 +14,7 @@ steps = [
     'v947_patch.py',
     'v948_cleanup.py',
     'v949_remove_careeronestop.py',
+    'v950_muse_runtime_fix.py',
 ]
 
 for script in steps:
