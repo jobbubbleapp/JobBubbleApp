@@ -1,46 +1,86 @@
-name: Inspect Job Display Logic
+name: Inspect JobBubble Source Logic
 
 on:
+  workflow_dispatch:
   push:
     branches: [ feature/dark-theme-muse-verification ]
     paths:
+      - '**/*.zip'
+      - 'scripts/**'
       - '.github/workflows/inspect-job-display.yml'
+
+permissions:
+  contents: read
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: Inspect Muse loading, filtering and display path
+      - uses: actions/checkout@v5
+
+      - name: Extract, patch and inspect current source
         shell: bash
         run: |
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          test -n "$ZIP_FILE"
           rm -rf /tmp/jb && mkdir -p /tmp/jb
           unzip -q "$ZIP_FILE" -d /tmp/jb
           MAIN=$(find /tmp/jb -type f -path '*/app/src/main/java/com/jobbubble/app/MainActivity.java' -print -quit)
+          test -n "$MAIN"
           ROOT=${MAIN%/app/src/main/java/com/jobbubble/app/MainActivity.java}
           python3 scripts/v943_patch.py "$ROOT"
           python3 scripts/v944_patch.py "$ROOT"
           python3 scripts/v947_patch.py "$ROOT"
-          echo '=== Muse/source/refining references ==='
-          grep -n -E -C 10 'refining|location_refining|The Muse|themuse|sourceParam|normalizeSource|requestRefinedJobs' "$MAIN" || true
-          echo '=== loadJobs and request construction ==='
-          grep -n -E -C 35 'void loadJobs|loadJobs\(|/jobs|radius|distance|savedLocation' "$MAIN" || true
-          echo '=== JSON parsing and coordinates ==='
-          grep -n -E -C 30 'getJSONArray\("jobs"\)|optJSONArray\("jobs"\)|latitude|longitude|lat|lng|lon' "$MAIN" || true
-          echo '=== filtering/visible jobs ==='
-          grep -n -E -C 30 'visibleJobs|boolean ok=d<=|preciseLocationsOnly|minPay|distanceMiles|haversine|distanceBetween' "$MAIN" || true
-          echo '=== rendering/piles ==='
-          grep -n -E -C 20 'buildPiles|renderJobs|showClusterSideList|jobIndexes' "$MAIN" || true
-          echo '=== LIVE MUSE BACKEND RESPONSE ==='
+          python3 scripts/v948_cleanup.py "$ROOT"
+
+          echo '=== SOURCE INVENTORY ==='
+          find "$ROOT" -type f \
+            -not -path '*/.gradle/*' -not -path '*/build/*' -not -path '*/.git/*' \
+            | sed "s#^$ROOT/##" | sort
+          echo '=== MAINACTIVITY SIZE ==='
+          wc -l "$MAIN"
+          echo '=== TODO / FIXME / HACK ==='
+          grep -RInE 'TODO|FIXME|HACK|XXX' "$ROOT" \
+            --exclude-dir=.gradle --exclude-dir=build --exclude-dir=.git || true
+          echo '=== MERGE MARKERS ==='
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' "$ROOT" \
+              --exclude-dir=.gradle --exclude-dir=build --exclude-dir=.git; then
+            exit 1
+          fi
+          echo '=== JOB SOURCE / CATEGORY DIALOGS ==='
+          grep -n -E -C 35 'Job source|Choose which job source|Job category|Choose a category|Retail & Sales|All sources' "$MAIN" || true
+          echo '=== SOURCE / FILTER / DISTANCE LOGIC ==='
+          grep -n -E -C 25 'normalizeSource|sourceParam|category|distanceValue|maxDistanceMiles|minPay|preciseLocationsOnly|boolean ok=d<=' "$MAIN" || true
+          echo '=== MUSE / NETWORK / REFINEMENT LOGIC ==='
+          grep -n -E -C 25 'The Muse|themuse|loadJobs|requestRefinedJobs|refining|location_refining|/jobs' "$MAIN" || true
+          echo '=== CLUSTER / RENDERING LOGIC ==='
+          grep -n -E -C 20 'buildPiles|renderJobs|showClusterSideList|jobIndexes|size\(\)>5' "$MAIN" || true
+          echo '=== LEGACY PURPLE COLOR LITERALS NEAR FILTER COPY ==='
+          python3 - "$MAIN" <<'PY'
+          import re,sys
+          text=open(sys.argv[1],encoding='utf-8').read()
+          for marker in ('Job category','Job source','Choose a category to filter jobs.','Choose which job source to show.'):
+              i=text.find(marker)
+              if i<0: continue
+              lo=max(0,i-6000); hi=min(len(text),i+12000)
+              colors=sorted(set(re.findall(r'#[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{8}',text[lo:hi])))
+              print(marker, colors)
+          PY
+
+      - name: Check live Muse backend response
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
-          import json, urllib.parse, urllib.request, time, math
+          import json,urllib.parse,urllib.request,time
           base='https://jobbubble-backend-1.onrender.com/jobs'
-          params={'location':'Everett, WA','radius':'100','source':'themuse'}
+          params={'where':'Everett, WA','lat':'47.9780','lon':'-122.2021','radius':'100','source':'themuse'}
           url=base+'?'+urllib.parse.urlencode(params)
           def fetch():
-              with urllib.request.urlopen(url, timeout=90) as r:
+              req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Inspection/9.4.48'})
+              with urllib.request.urlopen(req,timeout=90) as r:
                   return json.load(r)
           data=fetch()
           print('initial_count=',len(data.get('jobs',[])),'refining=',data.get('refining'),'location_refining=',data.get('location_refining'))
@@ -48,22 +88,21 @@ jobs:
               time.sleep(4)
               data=fetch()
               print('refined_count=',len(data.get('jobs',[])),'refining=',data.get('refining'),'location_refining=',data.get('location_refining'))
-          jobs=data.get('jobs',[])
-          muse=[j for j in jobs if str(j.get('source','')).lower().replace(' ','') in ('themuse','muse')]
-          print('muse_count=',len(muse))
+          jobs=data.get('jobs') or []
+          muse=[j for j in jobs if 'muse' in str(j.get('source','')).lower().replace(' ','')]
           located=[]
           for j in muse:
-              lat=j.get('lat',j.get('latitude')); lon=j.get('lng',j.get('lon',j.get('longitude')))
+              lat=j.get('lat',j.get('latitude'))
+              lon=j.get('lng',j.get('lon',j.get('longitude')))
               try:
                   lat=float(lat); lon=float(lon)
                   if -90<=lat<=90 and -180<=lon<=180: located.append((j,lat,lon))
-              except: pass
-          print('valid_coordinate_count=',len(located))
+              except (TypeError,ValueError):
+                  pass
+          print('muse_count=',len(muse),'valid_coordinate_count=',len(located))
           for j,lat,lon in located[:20]:
-              print('JOB',repr(j.get('title')),'location=',repr(j.get('location')),'lat=',lat,'lon=',lon,'source=',repr(j.get('source')))
-          if len(muse)<2:
-              raise SystemExit('FAIL: live backend returned fewer than 2 Muse jobs')
-          if len(located)<2:
-              raise SystemExit('FAIL: fewer than 2 Muse jobs have usable coordinates')
-          print('PASS: live backend currently supplies multiple Muse jobs with usable coordinates')
+              print('JOB',repr(j.get('title')),'location=',repr(j.get('location')),'lat=',lat,'lon=',lon)
+          if len(muse)<2: raise SystemExit('FAIL: live backend returned fewer than 2 Muse jobs')
+          if len(located)<2: raise SystemExit('FAIL: fewer than 2 Muse jobs have usable coordinates')
+          print('PASS: live backend supplies multiple Muse jobs with usable coordinates')
           PY
