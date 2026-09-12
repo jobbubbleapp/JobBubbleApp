@@ -17,6 +17,7 @@ steps = [
     'v950_muse_runtime_fix.py',
     'v951_location_fetch_fix.py',
     'v952_muse_location_query_fix.py',
+    'v953_blank_unknown_bubble_pay.py',
 ]
 
 for script in steps:
