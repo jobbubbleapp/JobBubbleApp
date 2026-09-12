@@ -4,6 +4,10 @@ local.properties
 .gradle/
 **/build/
 
+# Generated Android packages belong in CI artifacts/releases, not source history
+*.apk
+*.aab
+
 # Signing credentials
 *.jks
 *.keystore
@@ -34,5 +38,5 @@ credentials/
 .DS_Store
 Thumbs.db
 
-# Public project archives/APKs are intentionally NOT ignored because
-# JobBubble keeps downloadable project/build files in this public repository.
+# Source project archives are intentionally retained while the app still uses
+# the legacy ZIP-based source seed. Generated APKs are published by CI instead.
