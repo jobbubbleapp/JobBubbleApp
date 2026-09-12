@@ -17,13 +17,24 @@ permissions:
 jobs:
   build-release-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Validate repository patch scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/*.py
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' scripts .github README.md --exclude='*.zip' --exclude='*.apk'; then
+            echo 'Unresolved merge markers found in repository files'
+            exit 1
+          fi
+
       - name: Locate and extract Android project
         id: project
         shell: bash
@@ -31,12 +42,14 @@ jobs:
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
           test -n "$ZIP_FILE"
-          rm -rf "$RUNNER_TEMP/jobbubble-project"; mkdir -p "$RUNNER_TEMP/jobbubble-project"
+          rm -rf "$RUNNER_TEMP/jobbubble-project"
+          mkdir -p "$RUNNER_TEMP/jobbubble-project"
           unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-project"
           GRADLEW=$(find "$RUNNER_TEMP/jobbubble-project" -type f -name gradlew -print -quit)
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
-      - name: Apply and verify V9.4.47 changes
+
+      - name: Apply current JobBubble fixes and cleanup
         shell: bash
         run: |
           set -euo pipefail
@@ -44,6 +57,7 @@ jobs:
           python3 scripts/v943_patch.py "$P"
           python3 scripts/v944_patch.py "$P"
           python3 scripts/v947_patch.py "$P"
+          python3 scripts/v948_cleanup.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           STYLE="$P/app/src/main/res/raw/google_map_dark_style.json"
           grep -q 'The Muse' "$MAIN"
@@ -53,31 +67,72 @@ jobs:
           grep -q '(j.pay<=0||j.pay>=minPay)' "$MAIN"
           grep -q '#071C2C' "$MAIN"
           python3 -m json.tool "$STYLE" >/dev/null
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.47'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.48'
+
+      - name: Static source checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          P="${{ steps.project.outputs.project_dir }}"
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' "$P" \
+              --exclude-dir=.gradle --exclude-dir=build --exclude-dir=.git; then
+            echo 'Unresolved merge markers found in Android source'
+            exit 1
+          fi
+          while IFS= read -r -d '' f; do
+            node --check "$f"
+          done < <(find "$P" -type f -name '*.js' -not -path '*/node_modules/*' -print0)
+          python3 - <<'PY'
+          import json, os, xml.etree.ElementTree as ET
+          from pathlib import Path
+          root=Path(os.environ['PROJECT_DIR'])
+          for p in root.rglob('*.xml'):
+              if '.gradle' not in p.parts and 'build' not in p.parts:
+                  ET.parse(p)
+          for p in root.rglob('*.json'):
+              if '.gradle' not in p.parts and 'build' not in p.parts:
+                  json.loads(p.read_text(encoding='utf-8'))
+          print('XML/JSON validation passed')
+          PY
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+
       - name: Inject Google Maps API key
         shell: bash
         env:
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
           set -euo pipefail
           test -n "${GOOGLE_MAPS_API_KEY:-}"
-          export PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
           python3 - <<'PY'
           import os,re
           from pathlib import Path
           from xml.sax.saxutils import escape
-          project=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
-          manifests=list(project.rglob('src/main/AndroidManifest.xml')); assert manifests
+          project=Path(os.environ['PROJECT_DIR'])
+          key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          manifests=list(project.rglob('src/main/AndroidManifest.xml'))
+          assert manifests
+          replaced=0
           for manifest in manifests:
               text=manifest.read_text(encoding='utf-8')
               if 'com.google.android.geo.API_KEY' in text:
                   pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.DOTALL)
-                  text,n=pat.subn(r'\1'+key+r'\2',text,count=1); assert n
-                  manifest.write_text(text,encoding='utf-8')
+                  text,n=pat.subn(r'\1'+key+r'\2',text,count=1)
+                  if n:
+                      manifest.write_text(text,encoding='utf-8')
+                      replaced += 1
+          assert replaced, 'Maps API key metadata was not found'
           PY
+
+      - name: Android lint
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: chmod +x ./gradlew && ./gradlew --no-daemon lintRelease --stacktrace
+
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.project_dir }}
-        run: chmod +x ./gradlew && ./gradlew --no-daemon clean assembleRelease --stacktrace
+        run: ./gradlew --no-daemon assembleRelease --stacktrace
+
       - name: Sign and verify APK
         id: sign
         shell: bash
@@ -88,18 +143,20 @@ jobs:
           B=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
           U=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
           test -n "$U"
-          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.47-release-signed.apk"
+          K="$RUNNER_TEMP/jobbubble-release.jks"
+          A="$RUNNER_TEMP/aligned.apk"
+          S="$RUNNER_TEMP/JobBubble-V9.4.48-release-signed.apk"
           keytool -genkeypair -keystore "$K" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -alias jobbubble -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=JobBubble, OU=Android, O=JobBubble, C=US"
           "$ANDROID_HOME/build-tools/$B/zipalign" -f -p 4 "$U" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" sign --ks "$K" --ks-key-alias jobbubble --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEYSTORE_PASSWORD" --out "$S" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" verify --verbose "$S"
-          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk"
-          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/apks"
+          cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.48-release-signed.apk"
+          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.48-release-signed.apk" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.47-release-signed
+          name: JobBubble-V9.4.48-release-signed
           path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
-
-# Parallel release build trigger for final verification cycle.
