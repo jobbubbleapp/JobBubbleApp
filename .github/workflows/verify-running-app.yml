@@ -1,0 +1,132 @@
+name: Verify Running JobBubble App
+
+on:
+  push:
+    branches: [ feature/dark-theme-muse-verification ]
+    paths:
+      - '.github/workflows/verify-running-app.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-running-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Extract and patch project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/v943_patch.py "$P"
+          python3 scripts/v944_patch.py "$P"
+          python3 scripts/v947_patch.py "$P"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1); assert n
+                  m.write_text(t)
+          PY
+      - name: Build debug APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleDebug
+      - name: Prepare UI verification script
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/verify.sh" <<'SH'
+          set -euxo pipefail
+          APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          adb install -r "$APK"
+          PKG=$(aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$(aapt dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          echo "PACKAGE=$PKG ACTIVITY=$ACT"
+          adb shell am force-stop "$PKG"
+          adb shell am start -W -n "$PKG/$ACT"
+          sleep 12
+          adb shell uiautomator dump /sdcard/window.xml || true
+          adb pull /sdcard/window.xml "$RUNNER_TEMP/window-initial.xml" || true
+          adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
+          echo '=== INITIAL UI ==='
+          cat "$RUNNER_TEMP/window-initial.xml" || true
+          # Try visible guest/continue controls without assuming resource IDs.
+          for text in 'Continue as Guest' 'Guest' 'Continue' 'Skip'; do
+            if grep -q "$text" "$RUNNER_TEMP/window-initial.xml" 2>/dev/null; then
+              python3 - "$text" "$RUNNER_TEMP/window-initial.xml" <<'PY'
+          import re,sys,subprocess
+          text,path=sys.argv[1:]
+          s=open(path).read()
+          m=re.search(r'<node[^>]*text="'+re.escape(text)+r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s)
+          if m:
+              x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
+              subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+          PY
+              sleep 6; break
+            fi
+          done
+          adb shell uiautomator dump /sdcard/window.xml || true
+          adb pull /sdcard/window.xml "$RUNNER_TEMP/window-main.xml" || true
+          adb exec-out screencap -p > "$RUNNER_TEMP/main.png"
+          echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/window-main.xml" || true
+          echo '=== APP LOGS / MUSE ==='
+          adb logcat -d | grep -i -E 'jobbubble|muse|job|refin|error|exception' | tail -n 500 || true
+          # Acceptance requires UI evidence of multiple distinct Muse jobs. Dump all visible text for diagnosis.
+          python3 - <<'PY'
+          import re,html,os
+          p=os.environ['RUNNER_TEMP']+'/window-main.xml'
+          s=open(p).read() if os.path.exists(p) else ''
+          texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',s) if x.strip()]
+          print('VISIBLE_TEXTS=',texts)
+          muse=[x for x in texts if 'muse' in x.lower()]
+          print('VISIBLE_MUSE_TEXTS=',muse)
+          # Do not falsely pass just because the backend works: require at least two visible Muse-labelled/text results.
+          if len(set(muse)) < 2:
+              raise SystemExit('FAIL: running app UI does not yet prove multiple distinct live Muse jobs are visible')
+          print('PASS: running app UI contains multiple distinct Muse-visible entries')
+          PY
+          SH
+          chmod +x "$RUNNER_TEMP/verify.sh"
+      - name: Run Android emulator and verify live UI
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: $RUNNER_TEMP/verify.sh
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobBubble-running-app-verification
+          path: |
+            ${{ runner.temp }}/initial.png
+            ${{ runner.temp }}/main.png
+            ${{ runner.temp }}/window-initial.xml
+            ${{ runner.temp }}/window-main.xml
+          if-no-files-found: warn
