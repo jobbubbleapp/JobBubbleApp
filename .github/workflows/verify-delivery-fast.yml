@@ -1,0 +1,162 @@
+name: Verify JobBubble Delivery Fast
+
+on:
+  push:
+    branches: [ feature/code-cleanup-v948 ]
+    paths:
+      - '.github/workflows/verify-delivery-fast.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch live Muse jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,urllib.request,os
+          u='https://jobbubble-backend-1.onrender.com/jobs?where=Everett%2C+WA&lat=47.9780&lon=-122.2021&radius=100&source=themuse'
+          req=urllib.request.Request(u,headers={'User-Agent':'JobBubble-Final-Test/9.4.47'})
+          with urllib.request.urlopen(req,timeout=60) as r: d=json.load(r)
+          t=[]
+          for j in d.get('jobs') or []:
+              title=str(j.get('title') or '').strip(); src=str(j.get('source') or '').lower()
+              if title and ('muse' in src or not src): t.append(title)
+          t=list(dict.fromkeys(t))
+          print('LIVE_MUSE_JOB_COUNT=',len(t)); print('LIVE_MUSE_TITLES=',t[:20])
+          if len(t)<2: raise SystemExit('Need >=2 live Muse jobs')
+          open(os.environ['RUNNER_TEMP']+'/muse.txt','w').write('\n'.join(t))
+          PY
+
+      - name: Build app under test
+        id: project
+        shell: bash
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          set -euo pipefail
+          ZIP=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
+          mkdir -p "$RUNNER_TEMP/p"; unzip -q "$ZIP" -d "$RUNNER_TEMP/p"
+          G=$(find "$RUNNER_TEMP/p" -name gradlew -type f -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P"
+          export P GOOGLE_MAPS_API_KEY
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['P']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              s=m.read_text()
+              if 'com.google.android.geo.API_KEY' in s:
+                  q=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  s,n=q.subn(r'\1'+key+r'\2',s,count=1); assert n; m.write_text(s)
+          PY
+          chmod +x "$G"; cd "$P"; ./gradlew --no-daemon --max-workers=2 assembleDebug
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Create bounded UI test
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/test.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euxo pipefail
+          ui(){ n="$1"; rm -f "$RUNNER_TEMP/$n.xml"; timeout 12s adb shell uiautomator dump --compressed "/sdcard/$n.xml" || true; timeout 8s adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" || true; test -s "$RUNNER_TEMP/$n.xml"; }
+          tap_id(){ python3 - "$1" "$2" <<'PY'
+          import re,sys,subprocess
+          n,p=sys.argv[1:]; s=open(p).read()
+          for x in re.findall(r'<node[^>]*>',s):
+              i=re.search(r'resource-id="([^"]+)"',x); b=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',x)
+              if i and b and i.group(1).endswith('/'+n):
+                  subprocess.run(['adb','shell','input','tap',str((int(b[1])+int(b[3]))//2),str((int(b[2])+int(b[4]))//2)],check=True,timeout=8); raise SystemExit
+          raise SystemExit('missing id '+n)
+          PY
+          }
+          tap_text(){ python3 - "$1" "$2" <<'PY'
+          import re,sys,subprocess,html
+          n,p=sys.argv[1:]; s=open(p).read()
+          for x in re.findall(r'<node[^>]*>',s):
+              t=re.search(r'text="([^"]*)"',x); b=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',x)
+              if t and b and n.casefold() in html.unescape(t.group(1)).casefold():
+                  subprocess.run(['adb','shell','input','tap',str((int(b[1])+int(b[3]))//2),str((int(b[2])+int(b[4]))//2)],check=True,timeout=8); raise SystemExit
+          raise SystemExit('missing text '+n)
+          PY
+          }
+          adb wait-for-device
+          adb shell settings put global window_animation_scale 0; adb shell settings put global transition_animation_scale 0; adb shell settings put global animator_duration_scale 0
+          adb emu geo fix -122.2021 47.9780 || true
+          APK=$(find '${{ steps.project.outputs.project_dir }}' -path '*/build/outputs/apk/debug/*.apk' -type f -print -quit)
+          timeout 30s adb install -r -g "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'|sort -V|tail -1); A="$ANDROID_HOME/build-tools/$BT/aapt"
+          PKG=$("$A" dump badging "$APK"|sed -n "s/package: name='\([^']*\)'.*/\1/p"); ACT=$("$A" dump badging "$APK"|sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          adb shell am force-stop com.google.android.apps.nexuslauncher || true; adb shell am force-stop "$PKG"; timeout 20s adb shell am start -W -n "$PKG/$ACT"
+          ready=0
+          for i in $(seq 1 12); do
+            sleep 2; ui gate
+            if grep -q 'Got it' "$RUNNER_TEMP/gate.xml"; then tap_text 'Got it' "$RUNNER_TEMP/gate.xml" || true; continue; fi
+            if grep -qi 'Continue as Guest' "$RUNNER_TEMP/gate.xml"; then tap_id guestButton "$RUNNER_TEMP/gate.xml" || tap_text 'Continue as Guest' "$RUNNER_TEMP/gate.xml"; continue; fi
+            if grep -q 'resource-id="com.jobbubble.app:id/sourceChip"' "$RUNNER_TEMP/gate.xml"; then cp "$RUNNER_TEMP/gate.xml" "$RUNNER_TEMP/main.xml"; ready=1; break; fi
+            if grep -q "isn't responding" "$RUNNER_TEMP/gate.xml"; then adb shell input keyevent 4 || true; fi
+          done
+          test "$ready" = 1
+          timeout 10s adb exec-out screencap -p > "$RUNNER_TEMP/main.png" || true
+
+          tap_id sourceChip "$RUNNER_TEMP/main.xml"; sleep 1; ui source; tap_text 'The Muse' "$RUNNER_TEMP/source.xml"; sleep 1; ui source2; grep -q 'Apply' "$RUNNER_TEMP/source2.xml" && tap_text 'Apply' "$RUNNER_TEMP/source2.xml"
+          sleep 3; ui main2; grep -q 'The Muse' "$RUNNER_TEMP/main2.xml"
+          tap_id distanceValue "$RUNNER_TEMP/main2.xml"; sleep 1; ui dist; tap_text '100' "$RUNNER_TEMP/dist.xml"; sleep 1; ui dist2; grep -q 'Apply' "$RUNNER_TEMP/dist2.xml" && tap_text 'Apply' "$RUNNER_TEMP/dist2.xml"
+          sleep 3; ui main3; grep -Eq '100 ?mi|100 miles' "$RUNNER_TEMP/main3.xml"; grep -q 'The Muse' "$RUNNER_TEMP/main3.xml"
+          sleep 25; ui loaded; tap_id navList "$RUNNER_TEMP/loaded.xml"; sleep 5; ui list; timeout 10s adb exec-out screencap -p > "$RUNNER_TEMP/list.png" || true
+          python3 - <<'PY'
+          import os,re,html
+          s=open(os.environ['RUNNER_TEMP']+'/list.xml').read(); texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',s) if x.strip()]
+          norm=lambda x:' '.join(x.casefold().split()); visible='\n'.join(map(norm,texts)); exp=[x.strip() for x in open(os.environ['RUNNER_TEMP']+'/muse.txt') if x.strip()]
+          matches=[x for x in exp if norm(x) in visible]
+          print('VISIBLE_LIST_TEXTS=',texts); print('VISIBLE_MUSE_MATCHES=',matches)
+          if len(set(matches))<2: raise SystemExit('FAIL: fewer than two live Muse jobs visible in running app')
+          print('PASS: multiple live Muse jobs visible in running JobBubble')
+          PY
+          SH
+          chmod +x "$RUNNER_TEMP/test.sh"
+
+      - name: Run bounded emulator verification
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-snapshot -wipe-data
+          script: timeout 240s bash "$RUNNER_TEMP/test.sh"
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobBubble-fast-verification
+          path: |
+            ${{ runner.temp }}/main.png
+            ${{ runner.temp }}/list.png
+            ${{ runner.temp }}/main.xml
+            ${{ runner.temp }}/main2.xml
+            ${{ runner.temp }}/main3.xml
+            ${{ runner.temp }}/source.xml
+            ${{ runner.temp }}/dist.xml
+            ${{ runner.temp }}/loaded.xml
+            ${{ runner.temp }}/list.xml
+            ${{ runner.temp }}/muse.txt
+          if-no-files-found: warn
