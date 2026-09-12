@@ -23,23 +23,15 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          echo '=== DISK BEFORE ==='; df -h
-          sudo rm -rf /usr/local/lib/android/sdk/ndk || true
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
           sudo apt-get clean || true
           docker system prune -af || true
-          echo '=== DISK AFTER ==='; df -h
+          df -h
       - name: Enable KVM acceleration
         shell: bash
         run: |
-          set -euxo pipefail
-          if [ -e /dev/kvm ]; then
-            sudo chmod 666 /dev/kvm
-            ls -l /dev/kvm
-          else
-            echo 'WARNING: /dev/kvm is unavailable; emulator will use software acceleration.'
-          fi
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
       - name: Extract and patch project
         id: project
         shell: bash
@@ -90,38 +82,45 @@ jobs:
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
-          adb shell input keyevent 82 || true
           APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           adb install -r -g "$APK"
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
           PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
           ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
-          echo "PACKAGE=$PKG ACTIVITY=$ACT"
           adb logcat -c
           adb shell am force-stop "$PKG"
           adb shell am start -W -n "$PKG/$ACT"
-          for i in $(seq 1 30); do
-            adb shell dumpsys window windows | grep -q "$PKG" && break
-            sleep 1
-          done
-          sleep 5
+          sleep 3
+          # Android shows a one-time immersive/fullscreen education overlay on a fresh emulator.
+          # Dismiss it before attempting to inspect JobBubble itself.
+          adb shell uiautomator dump --compressed /sdcard/pre.xml || true
+          adb pull /sdcard/pre.xml "$RUNNER_TEMP/pre.xml" || true
+          if grep -q 'Got it' "$RUNNER_TEMP/pre.xml" 2>/dev/null; then
+            python3 - "$RUNNER_TEMP/pre.xml" <<'PY'
+          import re,sys,subprocess
+          s=open(sys.argv[1]).read()
+          m=re.search(r'<node[^>]*text="Got it"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s)
+          if m:
+              x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
+              subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+          PY
+            sleep 2
+          fi
           adb shell uiautomator dump --compressed /sdcard/window.xml || true
           adb pull /sdcard/window.xml "$RUNNER_TEMP/window-initial.xml" || true
           adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
-          echo '=== INITIAL UI ==='; cat "$RUNNER_TEMP/window-initial.xml" || true
           for text in 'Continue as Guest' 'Guest' 'Continue' 'Skip'; do
             if grep -q "$text" "$RUNNER_TEMP/window-initial.xml" 2>/dev/null; then
               python3 - "$text" "$RUNNER_TEMP/window-initial.xml" <<'PY'
           import re,sys,subprocess
-          text,path=sys.argv[1:]
-          s=open(path).read()
+          text,path=sys.argv[1:]; s=open(path).read()
           m=re.search(r'<node[^>]*text="'+re.escape(text)+r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s)
           if m:
               x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
               subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
           PY
-              sleep 4; break
+              sleep 5; break
             fi
           done
           adb shell uiautomator dump --compressed /sdcard/window.xml || true
@@ -132,8 +131,7 @@ jobs:
           adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|error|exception' | tail -n 300 || true
           python3 - <<'PY'
           import re,html,os
-          p=os.environ['RUNNER_TEMP']+'/window-main.xml'
-          s=open(p).read() if os.path.exists(p) else ''
+          p=os.environ['RUNNER_TEMP']+'/window-main.xml'; s=open(p).read() if os.path.exists(p) else ''
           texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',s) if x.strip()]
           print('VISIBLE_TEXTS=',texts)
           muse=[x for x in texts if 'muse' in x.lower()]
