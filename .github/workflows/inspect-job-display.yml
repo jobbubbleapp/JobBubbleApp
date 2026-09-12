@@ -15,11 +15,16 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Extract, patch and inspect current source
+        id: project
         shell: bash
         run: |
           set -euo pipefail
@@ -34,6 +39,7 @@ jobs:
           python3 scripts/v944_patch.py "$ROOT"
           python3 scripts/v947_patch.py "$ROOT"
           python3 scripts/v948_cleanup.py "$ROOT"
+          echo "project_dir=$ROOT" >> "$GITHUB_OUTPUT"
 
           echo '=== SOURCE INVENTORY ==='
           find "$ROOT" -type f \
@@ -57,6 +63,8 @@ jobs:
           grep -n -E -C 25 'The Muse|themuse|loadJobs|requestRefinedJobs|refining|location_refining|/jobs' "$MAIN" || true
           echo '=== CLUSTER / RENDERING LOGIC ==='
           grep -n -E -C 20 'buildPiles|renderJobs|showClusterSideList|jobIndexes|size\(\)>5' "$MAIN" || true
+          echo '=== STYLES ==='
+          find "$ROOT/app/src/main/res" -path '*/values*/styles.xml' -type f -print -exec cat {} \;
           echo '=== LEGACY PURPLE COLOR LITERALS NEAR FILTER COPY ==='
           python3 - "$MAIN" <<'PY'
           import re,sys
@@ -68,6 +76,18 @@ jobs:
               colors=sorted(set(re.findall(r'#[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{8}',text[lo:hi])))
               print(marker, colors)
           PY
+
+      - name: Print complete Android lint report
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set +e
+          chmod +x gradlew
+          ./gradlew --no-daemon lintRelease
+          REPORT=app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt
+          echo '=== FULL LINT REPORT ==='
+          if [ -f "$REPORT" ]; then cat "$REPORT"; else echo 'Lint text report not found'; fi
+          exit 0
 
       - name: Check live Muse backend response
         shell: bash
