@@ -37,10 +37,21 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json,urllib.request,os
-          url='https://jobbubble-backend-1.onrender.com/jobs?location=Everett%2C+WA&radius=100&source=themuse'
-          with urllib.request.urlopen(url, timeout=90) as r:
-              data=json.load(r)
+          import json,urllib.request,os,time
+          url='https://jobbubble-backend-1.onrender.com/jobs?where=Everett%2C+WA&lat=47.9780&lon=-122.2021&radius=100&source=themuse'
+          last=None
+          for attempt in range(3):
+              try:
+                  req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Verification/9.4.47'})
+                  with urllib.request.urlopen(req, timeout=90) as r:
+                      data=json.load(r)
+                  break
+              except Exception as e:
+                  last=e
+                  print(f'Backend attempt {attempt+1} failed: {e}')
+                  if attempt<2: time.sleep(8)
+          else:
+              raise last
           jobs=data.get('jobs') or []
           titles=[]
           for j in jobs:
@@ -135,7 +146,6 @@ jobs:
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
-          # Everett, WA. Emulator console geo fix takes longitude then latitude.
           adb emu geo fix -122.2021 47.9780 || true
           APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           adb install -r -g "$APK"
@@ -158,14 +168,10 @@ jobs:
           fi
           dump_ui main
           echo '=== MAIN BEFORE FILTERS ==='; cat "$RUNNER_TEMP/main.xml"
-
-          # Select The Muse source using the actual running app UI.
           tap_id 'com.jobbubble.app:id/sourceChip' "$RUNNER_TEMP/main.xml"
           sleep 1; dump_ui source-menu; echo '=== SOURCE MENU ==='; cat "$RUNNER_TEMP/source-menu.xml"
           tap_text 'The Muse' "$RUNNER_TEMP/source-menu.xml"
           sleep 2; dump_ui after-source
-
-          # Expand radius to 100 miles so multiple live Muse jobs qualify.
           tap_id 'com.jobbubble.app:id/distanceValue' "$RUNNER_TEMP/after-source.xml"
           sleep 1; dump_ui distance-menu; echo '=== DISTANCE MENU ==='; cat "$RUNNER_TEMP/distance-menu.xml"
           tap_text '100' "$RUNNER_TEMP/distance-menu.xml"
@@ -173,8 +179,6 @@ jobs:
           echo '=== SELECTED FILTERS ==='; cat "$RUNNER_TEMP/selected-filters.xml"
           grep -q 'The Muse' "$RUNNER_TEMP/selected-filters.xml"
           grep -q '100' "$RUNNER_TEMP/selected-filters.xml"
-
-          # Give the initial + refined Muse pipeline time to finish, then verify in List view.
           sleep 18
           dump_ui loaded-map
           adb exec-out screencap -p > "$RUNNER_TEMP/loaded-map.png"
@@ -184,7 +188,6 @@ jobs:
           echo '=== LIST UI ==='; cat "$RUNNER_TEMP/list.xml"
           echo '=== APP LOGS / MUSE ==='
           adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|http|error|exception' | tail -n 500 || true
-
           python3 - <<'PY'
           import re,html,os
           xml=open(os.environ['RUNNER_TEMP']+'/list.xml').read()
