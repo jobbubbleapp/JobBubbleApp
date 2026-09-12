@@ -32,6 +32,29 @@ jobs:
         shell: bash
         run: |
           if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Fetch expected live Muse jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,urllib.request,os
+          url='https://jobbubble-backend-1.onrender.com/jobs?location=Everett%2C+WA&radius=100&source=themuse'
+          with urllib.request.urlopen(url, timeout=90) as r:
+              data=json.load(r)
+          jobs=data.get('jobs') or []
+          titles=[]
+          for j in jobs:
+              title=str(j.get('title') or '').strip()
+              src=str(j.get('source') or '').lower()
+              if title and ('muse' in src or not src):
+                  titles.append(title)
+          titles=list(dict.fromkeys(titles))
+          print('LIVE_MUSE_JOB_COUNT=',len(titles))
+          print('LIVE_MUSE_TITLES=',titles[:20])
+          if len(titles)<2:
+              raise SystemExit('Backend did not provide at least two Muse jobs for Everett, WA / 100 mi')
+          open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt','w').write('\n'.join(titles))
+          PY
       - name: Extract and patch project
         id: project
         shell: bash
@@ -77,11 +100,43 @@ jobs:
           cat > "$RUNNER_TEMP/verify.sh" <<'SH'
           #!/usr/bin/env bash
           set -euxo pipefail
+          dump_ui() {
+            local name="$1"
+            adb shell uiautomator dump --compressed "/sdcard/$name.xml" || true
+            adb pull "/sdcard/$name.xml" "$RUNNER_TEMP/$name.xml" || true
+          }
+          tap_id() {
+            local id="$1" file="$2"
+            python3 - "$id" "$file" <<'PY'
+          import re,sys,subprocess
+          rid,path=sys.argv[1:]; s=open(path).read()
+          m=re.search(r'<node[^>]*resource-id="'+re.escape(rid)+r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s)
+          if not m: raise SystemExit('missing resource-id '+rid)
+          x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
+          subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+          PY
+          }
+          tap_text() {
+            local text="$1" file="$2"
+            python3 - "$text" "$file" <<'PY'
+          import re,sys,subprocess,html
+          needle,path=sys.argv[1:]; s=open(path).read()
+          nodes=re.findall(r'<node[^>]*>',s)
+          for node in nodes:
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.lower() in html.unescape(mt.group(1)).lower():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+          raise SystemExit('missing text '+needle)
+          PY
+          }
           adb wait-for-device
           adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
+          # Everett, WA. Emulator console geo fix takes longitude then latitude.
+          adb emu geo fix -122.2021 47.9780 || true
           APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           adb install -r -g "$APK"
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
@@ -92,53 +147,58 @@ jobs:
           adb shell am force-stop "$PKG"
           adb shell am start -W -n "$PKG/$ACT"
           sleep 3
-          # Android shows a one-time immersive/fullscreen education overlay on a fresh emulator.
-          # Dismiss it before attempting to inspect JobBubble itself.
-          adb shell uiautomator dump --compressed /sdcard/pre.xml || true
-          adb pull /sdcard/pre.xml "$RUNNER_TEMP/pre.xml" || true
-          if grep -q 'Got it' "$RUNNER_TEMP/pre.xml" 2>/dev/null; then
-            python3 - "$RUNNER_TEMP/pre.xml" <<'PY'
-          import re,sys,subprocess
-          s=open(sys.argv[1]).read()
-          m=re.search(r'<node[^>]*text="Got it"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s)
-          if m:
-              x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
-              subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
-          PY
-            sleep 2
-          fi
-          adb shell uiautomator dump --compressed /sdcard/window.xml || true
-          adb pull /sdcard/window.xml "$RUNNER_TEMP/window-initial.xml" || true
+          dump_ui pre
+          if grep -q 'Got it' "$RUNNER_TEMP/pre.xml" 2>/dev/null; then tap_text 'Got it' "$RUNNER_TEMP/pre.xml"; sleep 2; fi
+          dump_ui initial
           adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
-          for text in 'Continue as Guest' 'Guest' 'Continue' 'Skip'; do
-            if grep -q "$text" "$RUNNER_TEMP/window-initial.xml" 2>/dev/null; then
-              python3 - "$text" "$RUNNER_TEMP/window-initial.xml" <<'PY'
-          import re,sys,subprocess
-          text,path=sys.argv[1:]; s=open(path).read()
-          m=re.search(r'<node[^>]*text="'+re.escape(text)+r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s)
-          if m:
-              x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
-              subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
-          PY
-              sleep 5; break
-            fi
-          done
-          adb shell uiautomator dump --compressed /sdcard/window.xml || true
-          adb pull /sdcard/window.xml "$RUNNER_TEMP/window-main.xml" || true
-          adb exec-out screencap -p > "$RUNNER_TEMP/main.png"
-          echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/window-main.xml" || true
+          if grep -q 'Continue as Guest' "$RUNNER_TEMP/initial.xml" 2>/dev/null; then
+            tap_text 'Continue as Guest' "$RUNNER_TEMP/initial.xml"; sleep 6
+          elif grep -q 'Guest' "$RUNNER_TEMP/initial.xml" 2>/dev/null; then
+            tap_text 'Guest' "$RUNNER_TEMP/initial.xml"; sleep 6
+          fi
+          dump_ui main
+          echo '=== MAIN BEFORE FILTERS ==='; cat "$RUNNER_TEMP/main.xml"
+
+          # Select The Muse source using the actual running app UI.
+          tap_id 'com.jobbubble.app:id/sourceChip' "$RUNNER_TEMP/main.xml"
+          sleep 1; dump_ui source-menu; echo '=== SOURCE MENU ==='; cat "$RUNNER_TEMP/source-menu.xml"
+          tap_text 'The Muse' "$RUNNER_TEMP/source-menu.xml"
+          sleep 2; dump_ui after-source
+
+          # Expand radius to 100 miles so multiple live Muse jobs qualify.
+          tap_id 'com.jobbubble.app:id/distanceValue' "$RUNNER_TEMP/after-source.xml"
+          sleep 1; dump_ui distance-menu; echo '=== DISTANCE MENU ==='; cat "$RUNNER_TEMP/distance-menu.xml"
+          tap_text '100' "$RUNNER_TEMP/distance-menu.xml"
+          sleep 2; dump_ui selected-filters
+          echo '=== SELECTED FILTERS ==='; cat "$RUNNER_TEMP/selected-filters.xml"
+          grep -q 'The Muse' "$RUNNER_TEMP/selected-filters.xml"
+          grep -q '100' "$RUNNER_TEMP/selected-filters.xml"
+
+          # Give the initial + refined Muse pipeline time to finish, then verify in List view.
+          sleep 18
+          dump_ui loaded-map
+          adb exec-out screencap -p > "$RUNNER_TEMP/loaded-map.png"
+          tap_id 'com.jobbubble.app:id/navList' "$RUNNER_TEMP/loaded-map.xml"
+          sleep 5; dump_ui list
+          adb exec-out screencap -p > "$RUNNER_TEMP/list.png"
+          echo '=== LIST UI ==='; cat "$RUNNER_TEMP/list.xml"
           echo '=== APP LOGS / MUSE ==='
-          adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|error|exception' | tail -n 300 || true
+          adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|http|error|exception' | tail -n 500 || true
+
           python3 - <<'PY'
           import re,html,os
-          p=os.environ['RUNNER_TEMP']+'/window-main.xml'; s=open(p).read() if os.path.exists(p) else ''
-          texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',s) if x.strip()]
-          print('VISIBLE_TEXTS=',texts)
-          muse=[x for x in texts if 'muse' in x.lower()]
-          print('VISIBLE_MUSE_TEXTS=',muse)
-          if len(set(muse)) < 2:
-              raise SystemExit('FAIL: running app UI does not yet prove multiple distinct live Muse jobs are visible')
-          print('PASS: running app UI contains multiple distinct Muse-visible entries')
+          xml=open(os.environ['RUNNER_TEMP']+'/list.xml').read()
+          texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',xml) if x.strip()]
+          print('VISIBLE_LIST_TEXTS=',texts)
+          def norm(s): return ' '.join(s.casefold().split())
+          visible='\n'.join(norm(x) for x in texts)
+          expected=[x.strip() for x in open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt') if x.strip()]
+          matches=[t for t in expected if norm(t) in visible]
+          print('EXPECTED_MUSE_TITLES=',expected[:20])
+          print('VISIBLE_EXPECTED_MUSE_MATCHES=',matches)
+          if len(set(matches)) < 2:
+              raise SystemExit('FAIL: running JobBubble app did not visibly display at least two distinct live Muse job titles')
+          print('PASS: running JobBubble app visibly displays multiple distinct live Muse jobs')
           PY
           SH
           chmod +x "$RUNNER_TEMP/verify.sh"
@@ -163,7 +223,14 @@ jobs:
           name: JobBubble-running-app-verification
           path: |
             ${{ runner.temp }}/initial.png
-            ${{ runner.temp }}/main.png
-            ${{ runner.temp }}/window-initial.xml
-            ${{ runner.temp }}/window-main.xml
+            ${{ runner.temp }}/loaded-map.png
+            ${{ runner.temp }}/list.png
+            ${{ runner.temp }}/initial.xml
+            ${{ runner.temp }}/main.xml
+            ${{ runner.temp }}/source-menu.xml
+            ${{ runner.temp }}/distance-menu.xml
+            ${{ runner.temp }}/selected-filters.xml
+            ${{ runner.temp }}/loaded-map.xml
+            ${{ runner.temp }}/list.xml
+            ${{ runner.temp }}/expected-muse-titles.txt
           if-no-files-found: warn
