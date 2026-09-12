@@ -154,6 +154,39 @@ jobs:
             done
           }
 
+          reach_main_screen() {
+            for n in 1 2 3 4 5 6 7 8 9 10; do
+              dismiss_system_overlays
+              dump_ui "entry-$n"
+              f="$RUNNER_TEMP/entry-$n.xml"
+
+              if grep -qi 'All sources' "$f" 2>/dev/null; then
+                echo "Reached JobBubble main screen on attempt $n"
+                return 0
+              fi
+
+              if grep -qi 'Continue as Guest' "$f" 2>/dev/null; then
+                echo "Welcome screen detected; entering as guest"
+                tap_text 'Continue as Guest' "$f"
+                sleep 4
+                continue
+              fi
+
+              if grep -qi 'Guest' "$f" 2>/dev/null; then
+                echo "Guest entry control detected"
+                tap_text 'Guest' "$f"
+                sleep 4
+                continue
+              fi
+
+              echo "Main controls not ready yet (attempt $n)"
+              sleep 2
+            done
+
+            echo 'Could not reach JobBubble main screen after retries'
+            return 1
+          }
+
           adb wait-for-device
           adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
           adb shell settings put global window_animation_scale 0
@@ -177,16 +210,14 @@ jobs:
 
           dump_ui initial
           adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
-          if grep -qi 'Continue as Guest' "$RUNNER_TEMP/initial.xml" 2>/dev/null; then
-            tap_text 'Continue as Guest' "$RUNNER_TEMP/initial.xml"; sleep 5
-          elif grep -qi 'Guest' "$RUNNER_TEMP/initial.xml" 2>/dev/null; then
-            tap_text 'Guest' "$RUNNER_TEMP/initial.xml"; sleep 5
-          fi
-          dismiss_system_overlays
 
+          # The first UI dump can be stale while the welcome screen settles.
+          # Retry guest entry until the real map controls are visible.
+          reach_main_screen
           dump_ui main
           echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/main.xml"
           grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/main.xml" || { echo 'JobBubble is not foreground'; exit 1; }
+          grep -qi 'All sources' "$RUNNER_TEMP/main.xml" || { echo 'JobBubble main controls did not load'; exit 1; }
 
           # Select The Muse and press Apply on the source sheet.
           tap_text 'All sources' "$RUNNER_TEMP/main.xml"
@@ -267,6 +298,7 @@ jobs:
             ${{ runner.temp }}/list.png
             ${{ runner.temp }}/initial.xml
             ${{ runner.temp }}/main.xml
+            ${{ runner.temp }}/entry-*.xml
             ${{ runner.temp }}/source-menu.xml
             ${{ runner.temp }}/source-selected.xml
             ${{ runner.temp }}/after-source.xml
