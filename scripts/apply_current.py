@@ -20,6 +20,7 @@ steps = [
     'v953_blank_unknown_bubble_pay.py',
     'v954_compact_map_ui.py',
     'v955_fix_compact_marker_compile.py',
+    'v956_unknown_pay_detail_label.py',
 ]
 
 for script in steps:
