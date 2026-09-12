@@ -140,6 +140,28 @@ jobs:
           PY
           }
 
+          set_text_by_desc() {
+            local desc="$1" value="$2" file="$3"
+            python3 - "$desc" "$value" "$file" <<'PY'
+          import re,sys,subprocess,html
+          desc,value,path=sys.argv[1:]
+          s=open(path).read()
+          for node in re.findall(r'<node[^>]*>',s):
+              md=re.search(r'content-desc="([^"]*)"',node)
+              mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if md and mb and html.unescape(md.group(1)).casefold() == desc.casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+                  subprocess.run(['adb','shell','input','keyevent','KEYCODE_MOVE_END'],check=True)
+                  for _ in range(8):
+                      subprocess.run(['adb','shell','input','keyevent','KEYCODE_DEL'],check=True)
+                  subprocess.run(['adb','shell','input','text',value],check=True)
+                  subprocess.run(['adb','shell','input','keyevent','KEYCODE_BACK'],check=True)
+                  raise SystemExit(0)
+          raise SystemExit('missing content-desc '+desc)
+          PY
+          }
+
           dismiss_system_overlays() {
             for n in 1 2 3 4 5; do
               dump_ui "overlay-$n"
@@ -228,15 +250,16 @@ jobs:
           sleep 3; dismiss_system_overlays; dump_ui after-source
           grep -q 'The Muse' "$RUNNER_TEMP/after-source.xml"
 
-          # Select 100 miles and press Apply if the distance sheet uses one.
+          # Open distance, replace the miles edit field with 100, then apply.
           if grep -Eqi '25 ?mi|25 miles|Distance' "$RUNNER_TEMP/after-source.xml"; then
             if grep -Eqi '25 ?mi' "$RUNNER_TEMP/after-source.xml"; then tap_text '25' "$RUNNER_TEMP/after-source.xml"; else tap_text 'Distance' "$RUNNER_TEMP/after-source.xml"; fi
           else
             echo 'Could not find distance control'; exit 1
           fi
           sleep 1; dump_ui distance-menu; echo '=== DISTANCE MENU ==='; cat "$RUNNER_TEMP/distance-menu.xml"
-          tap_text '100' "$RUNNER_TEMP/distance-menu.xml"
+          set_text_by_desc 'miles' '100' "$RUNNER_TEMP/distance-menu.xml"
           sleep 1; dump_ui distance-selected
+          grep -q 'text="100"' "$RUNNER_TEMP/distance-selected.xml" || { echo 'Distance input did not change to 100'; exit 1; }
           if grep -q 'Apply' "$RUNNER_TEMP/distance-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/distance-selected.xml"; fi
           sleep 3; dismiss_system_overlays; dump_ui selected-filters
           grep -q 'The Muse' "$RUNNER_TEMP/selected-filters.xml"
