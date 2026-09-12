@@ -13,6 +13,7 @@ steps = [
     'v944_patch.py',
     'v947_patch.py',
     'v948_cleanup.py',
+    'v949_remove_careeronestop.py',
 ]
 
 for script in steps:
