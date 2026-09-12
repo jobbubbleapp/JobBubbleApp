@@ -7,15 +7,19 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect backend response
+      - name: Compare named and coordinate searches
         shell: bash
         run: |
           python3 - <<'PY'
-          import json,urllib.request
-          u='https://jobbubble-backend-1.onrender.com/jobs?where=Everett%2C+WA&lat=47.9780&lon=-122.2021&radius=100&source=themuse'
-          with urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'JobBubble-final-diagnostic'}),timeout=90) as r: d=json.load(r)
-          print('root keys', sorted(d.keys()))
-          print('search origin', d.get('search_origin'), 'refining',d.get('location_refining'))
-          for i,j in enumerate(d.get('jobs') or []):
-              print(i, json.dumps({k:j.get(k) for k in ['title','source','latitude','longitude','salary_min','salary_period','category','location','location_precision','location_approximate']},ensure_ascii=False))
+          import json,urllib.request,urllib.parse
+          base='https://jobbubble-backend-1.onrender.com/jobs'
+          tests=[('named','Everett, WA'),('coordinate','47.97800,-122.20210')]
+          for label,where in tests:
+              q=urllib.parse.urlencode({'where':where,'lat':'47.9780','lon':'-122.2021','radius':'100','source':'themuse'})
+              u=base+'?'+q
+              with urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'JobBubble-final-diagnostic'}),timeout=90) as r: d=json.load(r)
+              jobs=d.get('jobs') or []
+              print(label,'COUNT=',len(jobs),'SEARCH_LOCATION=',d.get('search_location'),'SOURCE=',d.get('source_filter'),'REFINING=',d.get('location_refining'))
+              for i,j in enumerate(jobs[:5]):
+                  print(label,i,json.dumps({k:j.get(k) for k in ['title','source','latitude','longitude','location']},ensure_ascii=False))
           PY
