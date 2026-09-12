@@ -1,0 +1,238 @@
+name: Verify JobBubble Delivery
+
+on:
+  push:
+    branches: [ feature/code-cleanup-v948 ]
+    paths:
+      - '.github/workflows/verify-delivery.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch current Muse titles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,urllib.request,os,time
+          url='https://jobbubble-backend-1.onrender.com/jobs?where=Everett%2C+WA&lat=47.9780&lon=-122.2021&radius=100&source=themuse'
+          last=None
+          for i in range(3):
+              try:
+                  req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Delivery-Verification/9.4.47'})
+                  with urllib.request.urlopen(req,timeout=90) as r: data=json.load(r)
+                  break
+              except Exception as e:
+                  last=e
+                  if i<2: time.sleep(5)
+          else: raise last
+          titles=[]
+          for j in data.get('jobs') or []:
+              t=str(j.get('title') or '').strip(); s=str(j.get('source') or '').lower()
+              if t and ('muse' in s or not s): titles.append(t)
+          titles=list(dict.fromkeys(titles))
+          print('LIVE_MUSE_JOB_COUNT=',len(titles))
+          print('LIVE_MUSE_TITLES=',titles[:20])
+          if len(titles)<2: raise SystemExit('Need at least two live Muse jobs for acceptance test')
+          open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt','w').write('\n'.join(titles))
+          PY
+
+      - name: Extract and patch project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          root=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          for m in root.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  p=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=p.subn(r'\1'+key+r'\2',t,count=1); assert n
+                  m.write_text(t)
+          PY
+
+      - name: Build debug APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        run: chmod +x gradlew && ./gradlew --no-daemon --max-workers=2 assembleDebug
+
+      - name: Prepare app verification
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/verify.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euxo pipefail
+
+          dump_ui(){ local n="$1"; adb shell uiautomator dump --compressed "/sdcard/$n.xml" || true; adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" || true; }
+
+          tap_text(){
+            python3 - "$1" "$2" <<'PY'
+          import re,sys,subprocess,html
+          needle,path=sys.argv[1:]; s=open(path).read()
+          for node in re.findall(r'<node[^>]*>',s):
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+          raise SystemExit('missing text '+needle)
+          PY
+          }
+
+          tap_id(){
+            python3 - "$1" "$2" <<'PY'
+          import re,sys,subprocess
+          needle,path=sys.argv[1:]; s=open(path).read()
+          for node in re.findall(r'<node[^>]*>',s):
+              mi=re.search(r'resource-id="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mi and mb and mi.group(1).endswith('/'+needle):
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+          raise SystemExit('missing id '+needle)
+          PY
+          }
+
+          adb wait-for-device
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb emu geo fix -122.2021 47.9780 || true
+
+          APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          adb install -r -g "$APK"
+          B=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$B/aapt"
+          PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          adb shell am force-stop com.google.android.apps.nexuslauncher || true
+          adb shell am force-stop "$PKG"
+          adb shell am start -W -n "$PKG/$ACT"
+
+          # Fresh emulators can show the immersive-mode education overlay after the app appears.
+          # Keep resolving system overlays and the welcome screen until the actual map UI is visible.
+          ready=0
+          for i in $(seq 1 10); do
+            sleep 2; dump_ui "gate-$i"; f="$RUNNER_TEMP/gate-$i.xml"
+            if grep -q 'Got it' "$f"; then tap_text 'Got it' "$f"; continue; fi
+            if grep -q "isn't responding" "$f"; then
+              if grep -q 'Wait' "$f"; then tap_text 'Wait' "$f" || true; else adb shell input keyevent 4 || true; fi
+              continue
+            fi
+            if grep -qi 'Continue as Guest' "$f"; then tap_id guestButton "$f" || tap_text 'Continue as Guest' "$f"; continue; fi
+            if grep -q 'resource-id="com.jobbubble.app:id/sourceChip"' "$f" && grep -q 'All sources' "$f"; then ready=1; cp "$f" "$RUNNER_TEMP/main.xml"; break; fi
+          done
+          test "$ready" = 1
+          adb exec-out screencap -p > "$RUNNER_TEMP/main.png"
+
+          # Source = The Muse.
+          tap_id sourceChip "$RUNNER_TEMP/main.xml"
+          sleep 1; dump_ui source-menu
+          grep -q 'The Muse' "$RUNNER_TEMP/source-menu.xml"
+          tap_text 'The Muse' "$RUNNER_TEMP/source-menu.xml"
+          sleep 1; dump_ui source-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/source-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/source-selected.xml"; fi
+          for i in $(seq 1 6); do sleep 1; dump_ui after-source; grep -q 'The Muse' "$RUNNER_TEMP/after-source.xml" && break; done
+          grep -q 'The Muse' "$RUNNER_TEMP/after-source.xml"
+
+          # Radius = 100 miles.
+          tap_id distanceValue "$RUNNER_TEMP/after-source.xml"
+          sleep 1; dump_ui distance-menu
+          tap_text '100' "$RUNNER_TEMP/distance-menu.xml"
+          sleep 1; dump_ui distance-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/distance-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/distance-selected.xml"; fi
+          for i in $(seq 1 6); do sleep 1; dump_ui selected; grep -Eq '100 ?mi|100 miles' "$RUNNER_TEMP/selected.xml" && break; done
+          grep -Eq '100 ?mi|100 miles' "$RUNNER_TEMP/selected.xml"
+          grep -q 'The Muse' "$RUNNER_TEMP/selected.xml"
+
+          # Wait for both initial and refinement responses, then open the real list UI.
+          sleep 25
+          dump_ui loaded-map
+          adb exec-out screencap -p > "$RUNNER_TEMP/loaded-map.png"
+          tap_id navList "$RUNNER_TEMP/loaded-map.xml"
+          sleep 5; dump_ui list
+          adb exec-out screencap -p > "$RUNNER_TEMP/list.png"
+          echo '=== LIST UI ==='; cat "$RUNNER_TEMP/list.xml"
+          echo '=== JOB/MUSE LOGS ==='
+          adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|http|error|exception' | tail -n 500 || true
+
+          python3 - <<'PY'
+          import re,html,os
+          xml=open(os.environ['RUNNER_TEMP']+'/list.xml').read()
+          texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',xml) if x.strip()]
+          def norm(s): return ' '.join(s.casefold().split())
+          visible='\n'.join(norm(x) for x in texts)
+          expected=[x.strip() for x in open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt') if x.strip()]
+          matches=[t for t in expected if norm(t) in visible]
+          print('VISIBLE_LIST_TEXTS=',texts)
+          print('VISIBLE_EXPECTED_MUSE_MATCHES=',matches)
+          if len(set(matches)) < 2:
+              raise SystemExit('FAIL: fewer than two live Muse job titles are visibly rendered in JobBubble')
+          print('PASS: multiple live Muse jobs are visibly rendered in the running JobBubble app')
+          PY
+          SH
+          chmod +x "$RUNNER_TEMP/verify.sh"
+
+      - name: Run real app verification
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-snapshot -wipe-data
+          script: bash "$RUNNER_TEMP/verify.sh"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobBubble-delivery-verification
+          path: |
+            ${{ runner.temp }}/main.png
+            ${{ runner.temp }}/loaded-map.png
+            ${{ runner.temp }}/list.png
+            ${{ runner.temp }}/main.xml
+            ${{ runner.temp }}/source-menu.xml
+            ${{ runner.temp }}/distance-menu.xml
+            ${{ runner.temp }}/selected.xml
+            ${{ runner.temp }}/loaded-map.xml
+            ${{ runner.temp }}/list.xml
+            ${{ runner.temp }}/expected-muse-titles.txt
+            ${{ runner.temp }}/gate-*.xml
+          if-no-files-found: warn
