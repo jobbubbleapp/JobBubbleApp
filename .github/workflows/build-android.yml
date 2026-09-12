@@ -101,3 +101,5 @@ jobs:
           path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
+
+# Parallel release build trigger for final verification cycle.
