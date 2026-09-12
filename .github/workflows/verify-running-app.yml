@@ -2,9 +2,12 @@ name: Verify Running JobBubble App
 
 on:
   push:
-    branches: [ feature/dark-theme-muse-verification ]
+    branches:
+      - feature/dark-theme-muse-verification
+      - feature/code-cleanup-v948
     paths:
       - '.github/workflows/verify-running-app.yml'
+      - 'scripts/**'
 
 permissions:
   contents: read
@@ -78,9 +81,7 @@ jobs:
           unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
           GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
           P=$(dirname "$GRADLEW")
-          python3 scripts/v943_patch.py "$P"
-          python3 scripts/v944_patch.py "$P"
-          python3 scripts/v947_patch.py "$P"
+          python3 scripts/apply_current.py "$P"
           echo "project_dir=$P" >> "$GITHUB_OUTPUT"
 
       - name: Inject Maps key
@@ -167,8 +168,6 @@ jobs:
           PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
           ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
 
-          # The Google APIs image sometimes lets Pixel Launcher ANR in the background.
-          # Kill it cleanly so its ANR dialog cannot cover the app under test.
           adb shell am force-stop com.google.android.apps.nexuslauncher || true
           adb logcat -c
           adb shell am force-stop "$PKG"
@@ -187,23 +186,18 @@ jobs:
 
           dump_ui main
           echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/main.xml"
-          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/main.xml" || {
-            echo 'JobBubble is not the visible foreground UI'; exit 1;
-          }
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/main.xml" || { echo 'JobBubble is not foreground'; exit 1; }
 
-          # Select Muse by visible app text rather than brittle generated view IDs.
-          if grep -qi 'All sources' "$RUNNER_TEMP/main.xml"; then
-            tap_text 'All sources' "$RUNNER_TEMP/main.xml"
-          elif grep -qi 'Source' "$RUNNER_TEMP/main.xml"; then
-            tap_text 'Source' "$RUNNER_TEMP/main.xml"
-          else
-            echo 'Could not find source control'; exit 1
-          fi
+          # Select The Muse and press Apply on the source sheet.
+          tap_text 'All sources' "$RUNNER_TEMP/main.xml"
           sleep 1; dump_ui source-menu; echo '=== SOURCE MENU ==='; cat "$RUNNER_TEMP/source-menu.xml"
           tap_text 'The Muse' "$RUNNER_TEMP/source-menu.xml"
-          sleep 2; dismiss_system_overlays; dump_ui after-source
+          sleep 1; dump_ui source-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/source-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/source-selected.xml"; fi
+          sleep 3; dismiss_system_overlays; dump_ui after-source
+          grep -q 'The Muse' "$RUNNER_TEMP/after-source.xml"
 
-          # Expand radius using visible distance text.
+          # Select 100 miles and press Apply if the distance sheet uses one.
           if grep -Eqi '25 ?mi|25 miles|Distance' "$RUNNER_TEMP/after-source.xml"; then
             if grep -Eqi '25 ?mi' "$RUNNER_TEMP/after-source.xml"; then tap_text '25' "$RUNNER_TEMP/after-source.xml"; else tap_text 'Distance' "$RUNNER_TEMP/after-source.xml"; fi
           else
@@ -211,22 +205,18 @@ jobs:
           fi
           sleep 1; dump_ui distance-menu; echo '=== DISTANCE MENU ==='; cat "$RUNNER_TEMP/distance-menu.xml"
           tap_text '100' "$RUNNER_TEMP/distance-menu.xml"
-          sleep 2; dismiss_system_overlays; dump_ui selected-filters
+          sleep 1; dump_ui distance-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/distance-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/distance-selected.xml"; fi
+          sleep 3; dismiss_system_overlays; dump_ui selected-filters
           grep -q 'The Muse' "$RUNNER_TEMP/selected-filters.xml"
           grep -q '100' "$RUNNER_TEMP/selected-filters.xml"
 
-          # Allow initial and refined Muse responses to render.
           sleep 20
           dismiss_system_overlays
           dump_ui loaded-map
           adb exec-out screencap -p > "$RUNNER_TEMP/loaded-map.png"
 
-          # Open list view by visible text.
-          if grep -qi 'List' "$RUNNER_TEMP/loaded-map.xml"; then
-            tap_text 'List' "$RUNNER_TEMP/loaded-map.xml"
-          else
-            echo 'Could not find List navigation'; exit 1
-          fi
+          tap_text 'List' "$RUNNER_TEMP/loaded-map.xml"
           sleep 5; dismiss_system_overlays; dump_ui list
           adb exec-out screencap -p > "$RUNNER_TEMP/list.png"
           echo '=== LIST UI ==='; cat "$RUNNER_TEMP/list.xml"
@@ -278,7 +268,10 @@ jobs:
             ${{ runner.temp }}/initial.xml
             ${{ runner.temp }}/main.xml
             ${{ runner.temp }}/source-menu.xml
+            ${{ runner.temp }}/source-selected.xml
+            ${{ runner.temp }}/after-source.xml
             ${{ runner.temp }}/distance-menu.xml
+            ${{ runner.temp }}/distance-selected.xml
             ${{ runner.temp }}/selected-filters.xml
             ${{ runner.temp }}/loaded-map.xml
             ${{ runner.temp }}/list.xml
