@@ -74,6 +74,9 @@ jobs:
               raise SystemExit('CareerOneStop/NLx still present')
           print('Dead-code and CareerOneStop removal verification passed.')
           PY
+      - name: Probe patched runtime flow
+        shell: bash
+        run: python3 scripts/probe_runtime_flow.py "${{ steps.project.outputs.project_dir }}"
       - name: Inject Google Maps API key
         shell: bash
         env:
