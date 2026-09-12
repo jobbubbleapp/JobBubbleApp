@@ -3,8 +3,12 @@ name: Export JobBubble Source
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - feature/dark-theme-muse-verification
     paths:
+      - '**/*.zip'
+      - 'scripts/**'
       - '.github/workflows/export-source.yml'
 
 permissions:
@@ -15,28 +19,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Find latest project ZIP
-        id: zip
+      - name: Extract current source
+        id: project
         shell: bash
         run: |
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
           test -n "$ZIP_FILE"
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Extract source
-        shell: bash
-        run: |
-          set -euo pipefail
+          rm -rf extracted
           mkdir -p extracted
-          unzip -q "${{ steps.zip.outputs.zip_file }}" -d extracted
-          find extracted -maxdepth 3 -type f | sort | head -100
+          unzip -q "$ZIP_FILE" -d extracted
+          GRADLEW=$(find extracted -type f -name gradlew -print -quit)
+          test -n "$GRADLEW"
+          P=$(dirname "$GRADLEW")
+          python3 scripts/v943_patch.py "$P"
+          python3 scripts/v944_patch.py "$P"
+          python3 scripts/v947_patch.py "$P"
+          python3 scripts/v948_cleanup.py "$P"
+          test "$(tr -d '\r\n' < "$P/VERSION.txt")" = '9.4.48'
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+          find "$P" -maxdepth 4 -type f -not -path '*/build/*' -not -path '*/.gradle/*' | sort | head -150
 
-      - name: Upload extracted source
+      - name: Upload cleaned current source
         uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-extracted-source
-          path: extracted
-          retention-days: 7
+          name: JobBubble-V9.4.48-clean-source
+          path: ${{ steps.project.outputs.project_dir }}
+          retention-days: 14
