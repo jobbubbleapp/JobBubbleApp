@@ -74,7 +74,6 @@ jobs:
           adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
           echo '=== INITIAL UI ==='
           cat "$RUNNER_TEMP/window-initial.xml" || true
-          # Try visible guest/continue controls without assuming resource IDs.
           for text in 'Continue as Guest' 'Guest' 'Continue' 'Skip'; do
             if grep -q "$text" "$RUNNER_TEMP/window-initial.xml" 2>/dev/null; then
               python3 - "$text" "$RUNNER_TEMP/window-initial.xml" <<'PY'
@@ -95,7 +94,6 @@ jobs:
           echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/window-main.xml" || true
           echo '=== APP LOGS / MUSE ==='
           adb logcat -d | grep -i -E 'jobbubble|muse|job|refin|error|exception' | tail -n 500 || true
-          # Acceptance requires UI evidence of multiple distinct Muse jobs. Dump all visible text for diagnosis.
           python3 - <<'PY'
           import re,html,os
           p=os.environ['RUNNER_TEMP']+'/window-main.xml'
@@ -104,7 +102,6 @@ jobs:
           print('VISIBLE_TEXTS=',texts)
           muse=[x for x in texts if 'muse' in x.lower()]
           print('VISIBLE_MUSE_TEXTS=',muse)
-          # Do not falsely pass just because the backend works: require at least two visible Muse-labelled/text results.
           if len(set(muse)) < 2:
               raise SystemExit('FAIL: running app UI does not yet prove multiple distinct live Muse jobs are visible')
           print('PASS: running app UI contains multiple distinct Muse-visible entries')
@@ -118,7 +115,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: $RUNNER_TEMP/verify.sh
+          script: bash "$RUNNER_TEMP/verify.sh"
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
