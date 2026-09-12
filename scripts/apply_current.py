@@ -19,6 +19,7 @@ steps = [
     'v952_muse_location_query_fix.py',
     'v953_blank_unknown_bubble_pay.py',
     'v954_compact_map_ui.py',
+    'v955_fix_compact_marker_compile.py',
 ]
 
 for script in steps:
