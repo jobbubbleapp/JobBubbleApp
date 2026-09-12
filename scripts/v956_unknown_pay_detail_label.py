@@ -10,19 +10,19 @@ root = Path(sys.argv[1])
 java = root / 'app/src/main/java/com/jobbubble/app/MainActivity.java'
 version = root / 'VERSION.txt'
 s = java.read_text(encoding='utf-8')
-original = s
 
-# When a provider does not publish compensation, the job-detail card must not
-# present $0.0/hr as if it were a real wage. Keep real positive pay unchanged.
-replacement = '(j.pay>0?("$"+j.pay+"/hr"):"See listing for pay")'
+# When a provider does not publish compensation, never present $0.0/hr as if it
+# were real pay. Real positive wages remain unchanged. The map bubble itself
+# stays blank for unknown pay; job-detail/list cards say "See listing for pay".
 patterns = [
-    r'"\$"\s*\+\s*j\.pay\s*\+\s*"/hr"',
-    r'String\.format\(Locale\.US\s*,\s*"\$%\.1f/hr"\s*,\s*j\.pay\s*\)',
-    r'String\.format\(java\.util\.Locale\.US\s*,\s*"\$%\.1f/hr"\s*,\s*j\.pay\s*\)',
+    (r'"\$"\s*\+\s*money\(j\.pay\)\s*\+\s*"/hr"', '(j.pay>0?("$"+money(j.pay)+"/hr"):"See listing for pay")'),
+    (r'"\$"\s*\+\s*j\.pay\s*\+\s*"/hr"', '(j.pay>0?("$"+j.pay+"/hr"):"See listing for pay")'),
+    (r'String\.format\(Locale\.US\s*,\s*"\$%\.1f/hr"\s*,\s*j\.pay\s*\)', '(j.pay>0?String.format(Locale.US,"$%.1f/hr",j.pay):"See listing for pay")'),
+    (r'String\.format\(java\.util\.Locale\.US\s*,\s*"\$%\.1f/hr"\s*,\s*j\.pay\s*\)', '(j.pay>0?String.format(java.util.Locale.US,"$%.1f/hr",j.pay):"See listing for pay")'),
 ]
 
 changed = 0
-for pattern in patterns:
+for pattern, replacement in patterns:
     s, n = re.subn(pattern, replacement, s)
     changed += n
 
@@ -32,4 +32,4 @@ if changed == 0:
 
 java.write_text(s, encoding='utf-8')
 version.write_text('9.4.55\n', encoding='utf-8')
-print(f'Updated {changed} job-detail pay label(s): unknown pay now says See listing for pay')
+print(f'Updated {changed} pay label(s): unknown pay now says See listing for pay')
