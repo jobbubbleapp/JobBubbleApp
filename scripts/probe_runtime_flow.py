@@ -27,6 +27,13 @@ needles = [
     'showClusterSideList(',
     'sourceChip.setOnClickListener',
     'distanceValue.setOnClickListener',
+    'makeJobBubble',
+    'renderSingleJobMarker',
+    'payText',
+    'payLabel',
+    'Pay not listed',
+    'pay not listed',
+    'Not listed',
     'Apply',
 ]
 
