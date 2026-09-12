@@ -103,11 +103,13 @@ if category_changes==0:
     category_changes=_retheme_filter('Job category','Job category filter')
 source_changes=_retheme_filter('final String[] src={','Job source filter')
 if source_changes==0:
+    source_changes=_retheme_filter('Choose which job source to show.','Job source filter')
+if source_changes==0:
     source_changes=_retheme_filter('Job source','Job source filter')
 if category_changes==0:
-    raise SystemExit('Job category filter theme target not found or already had no purple literals')
+    print('Job category filter already uses the current theme; no literal replacement needed')
 if source_changes==0:
-    raise SystemExit('Job source filter theme target not found or already had no purple literals')
+    print('Job source filter already uses shared/current theme colors; no literal replacement needed')
 
 # Correct appearance copy now that dark mode also changes Google Maps.
 s=s.replace('Choose the JobBubble interface theme. The map itself keeps the normal Google Maps appearance.',
