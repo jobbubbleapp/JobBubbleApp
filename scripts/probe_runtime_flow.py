@@ -29,6 +29,10 @@ needles = [
     'distanceValue.setOnClickListener',
     'makeJobBubble',
     'renderSingleJobMarker',
+    'choiceIcon(',
+    'showChoiceMenu(',
+    'drawCategoryBubbleIcon(',
+    'bubbleIconFamily(',
     'payText',
     'payLabel',
     'Pay not listed',
@@ -45,8 +49,8 @@ for needle in needles:
         continue
     print(f'\n--- {needle!r}: {len(hits)} hit(s) ---')
     for i in hits[:8]:
-        start = max(0, i - 12)
-        end = min(len(lines), i + 18)
+        start = max(0, i - 18)
+        end = min(len(lines), i + 42)
         key = (start, end)
         if key in seen:
             continue
