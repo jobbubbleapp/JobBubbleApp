@@ -1,9 +1,12 @@
 name: Verify Running JobBubble App
 
 on:
+  workflow_dispatch:
   push:
     branches: [ feature/dark-theme-muse-verification ]
     paths:
+      - '**/*.zip'
+      - 'scripts/**'
       - '.github/workflows/verify-running-app.yml'
 
 permissions:
@@ -14,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -23,12 +26,11 @@ jobs:
       - name: Free runner storage
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
           sudo apt-get clean || true
           docker system prune -af || true
-          df -h
 
       - name: Enable KVM acceleration
         shell: bash
@@ -42,22 +44,21 @@ jobs:
           python3 - <<'PY'
           import json,urllib.request,os,time
           url='https://jobbubble-backend-1.onrender.com/jobs?where=Everett%2C+WA&lat=47.9780&lon=-122.2021&radius=100&source=themuse'
+          data=None
           last=None
           for attempt in range(3):
               try:
-                  req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Verification/9.4.47'})
-                  with urllib.request.urlopen(req, timeout=90) as r:
+                  req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Verification/9.4.48'})
+                  with urllib.request.urlopen(req,timeout=90) as r:
                       data=json.load(r)
                   break
               except Exception as e:
                   last=e
                   print(f'Backend attempt {attempt+1} failed: {e}')
                   if attempt<2: time.sleep(8)
-          else:
-              raise last
-          jobs=data.get('jobs') or []
+          if data is None: raise last
           titles=[]
-          for j in jobs:
+          for j in data.get('jobs') or []:
               title=str(j.get('title') or '').strip()
               src=str(j.get('source') or '').lower()
               if title and ('muse' in src or not src): titles.append(title)
@@ -65,22 +66,26 @@ jobs:
           print('LIVE_MUSE_JOB_COUNT=',len(titles))
           print('LIVE_MUSE_TITLES=',titles[:20])
           if len(titles)<2: raise SystemExit('Backend did not provide at least two Muse jobs')
-          open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt','w').write('\n'.join(titles))
+          open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt','w',encoding='utf-8').write('\n'.join(titles))
           PY
 
-      - name: Extract and patch project
+      - name: Extract, patch and clean project
         id: project
         shell: bash
         run: |
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          test -n "$ZIP_FILE"
           rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
           unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
           GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          test -n "$GRADLEW"
           P=$(dirname "$GRADLEW")
           python3 scripts/v943_patch.py "$P"
           python3 scripts/v944_patch.py "$P"
           python3 scripts/v947_patch.py "$P"
+          python3 scripts/v948_cleanup.py "$P"
+          test "$(tr -d '\r\n' < "$P/VERSION.txt")" = '9.4.48'
           echo "project_dir=$P" >> "$GITHUB_OUTPUT"
 
       - name: Inject Maps key
@@ -95,13 +100,18 @@ jobs:
           import os,re
           from pathlib import Path
           from xml.sax.saxutils import escape
-          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
-          for m in p.rglob('src/main/AndroidManifest.xml'):
-              t=m.read_text()
-              if 'com.google.android.geo.API_KEY' in t:
-                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
-                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1); assert n
-                  m.write_text(t)
+          root=Path(os.environ['PROJECT_DIR'])
+          key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          replaced=0
+          for manifest in root.rglob('src/main/AndroidManifest.xml'):
+              text=manifest.read_text(encoding='utf-8')
+              if 'com.google.android.geo.API_KEY' not in text: continue
+              pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+              text,n=pat.subn(r'\1'+key+r'\2',text,count=1)
+              if n:
+                  manifest.write_text(text,encoding='utf-8')
+                  replaced+=1
+          assert replaced
           PY
 
       - name: Build debug APK
@@ -115,40 +125,50 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/verify.sh" <<'SH'
           #!/usr/bin/env bash
-          set -euxo pipefail
+          set -euo pipefail
 
           dump_ui() {
             local name="$1"
-            adb shell uiautomator dump --compressed "/sdcard/$name.xml" || true
-            adb pull "/sdcard/$name.xml" "$RUNNER_TEMP/$name.xml" || true
+            adb shell uiautomator dump --compressed "/sdcard/$name.xml" >/dev/null || true
+            adb pull "/sdcard/$name.xml" "$RUNNER_TEMP/$name.xml" >/dev/null || true
           }
 
-          tap_text() {
-            local text="$1" file="$2"
-            python3 - "$text" "$file" <<'PY'
-          import re,sys,subprocess,html
-          needle,path=sys.argv[1:]
-          s=open(path).read()
-          for node in re.findall(r'<node[^>]*>',s):
-              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
-              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
-                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+          tap_node() {
+            local mode="$1" needle="$2" file="$3"
+            python3 - "$mode" "$needle" "$file" <<'PY'
+          import html,re,subprocess,sys
+          mode,needle,path=sys.argv[1:]
+          text=open(path,encoding='utf-8').read()
+          for node in re.findall(r'<node[^>]*>',text):
+              bounds=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if not bounds: continue
+              if mode=='text':
+                  value=re.search(r'text="([^"]*)"',node)
+                  matched=value and needle.casefold() in html.unescape(value.group(1)).casefold()
+              else:
+                  value=re.search(r'resource-id="([^"]*)"',node)
+                  matched=value and value.group(1).endswith('/'+needle)
+              if matched:
+                  x=(int(bounds[1])+int(bounds[3]))//2
+                  y=(int(bounds[2])+int(bounds[4]))//2
                   subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
                   raise SystemExit(0)
-          raise SystemExit('missing text '+needle)
+          raise SystemExit(f'missing {mode}: {needle}')
           PY
           }
 
-          dismiss_system_overlays() {
-            for n in 1 2 3 4 5; do
+          tap_text() { tap_node text "$1" "$2"; }
+          tap_resource() { tap_node resource "$1" "$2"; }
+
+          dismiss_overlays() {
+            for n in 1 2 3 4; do
               dump_ui "overlay-$n"
               f="$RUNNER_TEMP/overlay-$n.xml"
-              if grep -q 'Got it' "$f" 2>/dev/null; then tap_text 'Got it' "$f"; sleep 2; continue; fi
+              if grep -q 'Got it' "$f" 2>/dev/null; then tap_text 'Got it' "$f" || true; sleep 1; continue; fi
               if grep -q "isn't responding" "$f" 2>/dev/null; then
-                if grep -q 'Close app' "$f"; then tap_text 'Close app' "$f"; else tap_text 'Wait' "$f" || true; fi
-                sleep 2; continue
+                tap_text 'Wait' "$f" 2>/dev/null || tap_text 'Close app' "$f" 2>/dev/null || true
+                sleep 1; continue
               fi
-              if grep -q 'System UI has stopped' "$f" 2>/dev/null; then tap_text 'Close app' "$f" || true; sleep 2; continue; fi
               break
             done
           }
@@ -161,92 +181,87 @@ jobs:
           adb emu geo fix -122.2021 47.9780 || true
 
           APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          test -n "$APK"
           adb install -r -g "$APK"
-          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
-          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
+          B=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$B/aapt"
           PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
           ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
-
-          # The Google APIs image sometimes lets Pixel Launcher ANR in the background.
-          # Kill it cleanly so its ANR dialog cannot cover the app under test.
           adb shell am force-stop com.google.android.apps.nexuslauncher || true
-          adb logcat -c
           adb shell am force-stop "$PKG"
+          adb logcat -c
           adb shell am start -W -n "$PKG/$ACT"
           sleep 3
-          dismiss_system_overlays
+          dismiss_overlays
 
           dump_ui initial
           adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
-          if grep -qi 'Continue as Guest' "$RUNNER_TEMP/initial.xml" 2>/dev/null; then
-            tap_text 'Continue as Guest' "$RUNNER_TEMP/initial.xml"; sleep 5
-          elif grep -qi 'Guest' "$RUNNER_TEMP/initial.xml" 2>/dev/null; then
-            tap_text 'Guest' "$RUNNER_TEMP/initial.xml"; sleep 5
+          if grep -qi 'Continue as Guest' "$RUNNER_TEMP/initial.xml"; then
+            tap_text 'Continue as Guest' "$RUNNER_TEMP/initial.xml"
+            sleep 5
+          elif grep -qi 'Guest' "$RUNNER_TEMP/initial.xml"; then
+            tap_text 'Guest' "$RUNNER_TEMP/initial.xml"
+            sleep 5
           fi
-          dismiss_system_overlays
+          dismiss_overlays
 
           dump_ui main
-          echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/main.xml"
-          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/main.xml" || {
-            echo 'JobBubble is not the visible foreground UI'; exit 1;
-          }
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/main.xml"
 
-          # Select Muse by visible app text rather than brittle generated view IDs.
-          if grep -qi 'All sources' "$RUNNER_TEMP/main.xml"; then
-            tap_text 'All sources' "$RUNNER_TEMP/main.xml"
-          elif grep -qi 'Source' "$RUNNER_TEMP/main.xml"; then
-            tap_text 'Source' "$RUNNER_TEMP/main.xml"
-          else
-            echo 'Could not find source control'; exit 1
-          fi
-          sleep 1; dump_ui source-menu; echo '=== SOURCE MENU ==='; cat "$RUNNER_TEMP/source-menu.xml"
+          # Source dialogs stage a choice until Apply is pressed.
+          tap_resource sourceChip "$RUNNER_TEMP/main.xml"
+          sleep 1
+          dump_ui source-menu
           tap_text 'The Muse' "$RUNNER_TEMP/source-menu.xml"
-          sleep 2; dismiss_system_overlays; dump_ui after-source
+          sleep 1
+          dump_ui source-selected
+          tap_text 'Apply' "$RUNNER_TEMP/source-selected.xml"
+          sleep 3
+          dismiss_overlays
 
-          # Expand radius using visible distance text.
-          if grep -Eqi '25 ?mi|25 miles|Distance' "$RUNNER_TEMP/after-source.xml"; then
-            if grep -Eqi '25 ?mi' "$RUNNER_TEMP/after-source.xml"; then tap_text '25' "$RUNNER_TEMP/after-source.xml"; else tap_text 'Distance' "$RUNNER_TEMP/after-source.xml"; fi
-          else
-            echo 'Could not find distance control'; exit 1
-          fi
-          sleep 1; dump_ui distance-menu; echo '=== DISTANCE MENU ==='; cat "$RUNNER_TEMP/distance-menu.xml"
+          dump_ui after-source
+          grep -q 'The Muse' "$RUNNER_TEMP/after-source.xml"
+
+          tap_resource distanceValue "$RUNNER_TEMP/after-source.xml"
+          sleep 1
+          dump_ui distance-menu
           tap_text '100' "$RUNNER_TEMP/distance-menu.xml"
-          sleep 2; dismiss_system_overlays; dump_ui selected-filters
+          sleep 1
+          dump_ui distance-selected
+          if grep -q 'text="Apply"' "$RUNNER_TEMP/distance-selected.xml"; then
+            tap_text 'Apply' "$RUNNER_TEMP/distance-selected.xml"
+          fi
+          sleep 3
+          dismiss_overlays
+
+          dump_ui selected-filters
           grep -q 'The Muse' "$RUNNER_TEMP/selected-filters.xml"
           grep -q '100' "$RUNNER_TEMP/selected-filters.xml"
 
-          # Allow initial and refined Muse responses to render.
           sleep 20
-          dismiss_system_overlays
+          dismiss_overlays
           dump_ui loaded-map
           adb exec-out screencap -p > "$RUNNER_TEMP/loaded-map.png"
 
-          # Open list view by visible text.
-          if grep -qi 'List' "$RUNNER_TEMP/loaded-map.xml"; then
-            tap_text 'List' "$RUNNER_TEMP/loaded-map.xml"
-          else
-            echo 'Could not find List navigation'; exit 1
-          fi
-          sleep 5; dismiss_system_overlays; dump_ui list
+          tap_resource navList "$RUNNER_TEMP/loaded-map.xml"
+          sleep 5
+          dismiss_overlays
+          dump_ui list
           adb exec-out screencap -p > "$RUNNER_TEMP/list.png"
-          echo '=== LIST UI ==='; cat "$RUNNER_TEMP/list.xml"
-          echo '=== APP LOGS / MUSE ==='
-          adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|http|error|exception' | tail -n 500 || true
 
           python3 - <<'PY'
-          import re,html,os
-          xml=open(os.environ['RUNNER_TEMP']+'/list.xml').read()
+          import html,os,re
+          xml=open(os.environ['RUNNER_TEMP']+'/list.xml',encoding='utf-8').read()
           texts=[html.unescape(x) for x in re.findall(r'text="([^"]+)"',xml) if x.strip()]
-          print('VISIBLE_LIST_TEXTS=',texts)
           def norm(s): return ' '.join(s.casefold().split())
           visible='\n'.join(norm(x) for x in texts)
-          expected=[x.strip() for x in open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt') if x.strip()]
+          expected=[x.strip() for x in open(os.environ['RUNNER_TEMP']+'/expected-muse-titles.txt',encoding='utf-8') if x.strip()]
           matches=[t for t in expected if norm(t) in visible]
-          print('EXPECTED_MUSE_TITLES=',expected[:20])
+          print('VISIBLE_LIST_TEXTS=',texts)
           print('VISIBLE_EXPECTED_MUSE_MATCHES=',matches)
           if len(set(matches)) < 2:
-              raise SystemExit('FAIL: running JobBubble app did not visibly display at least two distinct live Muse job titles')
-          print('PASS: running JobBubble app visibly displays multiple distinct live Muse jobs')
+              raise SystemExit('FAIL: running app did not visibly display at least two distinct live Muse job titles')
+          print('PASS: running app visibly displays multiple live Muse jobs')
           PY
           SH
           chmod +x "$RUNNER_TEMP/verify.sh"
@@ -275,13 +290,6 @@ jobs:
             ${{ runner.temp }}/initial.png
             ${{ runner.temp }}/loaded-map.png
             ${{ runner.temp }}/list.png
-            ${{ runner.temp }}/initial.xml
-            ${{ runner.temp }}/main.xml
-            ${{ runner.temp }}/source-menu.xml
-            ${{ runner.temp }}/distance-menu.xml
-            ${{ runner.temp }}/selected-filters.xml
-            ${{ runner.temp }}/loaded-map.xml
-            ${{ runner.temp }}/list.xml
+            ${{ runner.temp }}/*.xml
             ${{ runner.temp }}/expected-muse-titles.txt
-            ${{ runner.temp }}/overlay-*.xml
           if-no-files-found: warn
