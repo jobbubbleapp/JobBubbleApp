@@ -46,13 +46,15 @@ jobs:
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           STYLE="$P/app/src/main/res/raw/google_map_dark_style.json"
           grep -q 'The Muse' "$MAIN"
+          ! grep -qi 'CareerOneStop' "$MAIN"
+          ! grep -qi 'NLx' "$MAIN"
           grep -q 'if("dark".equals(mapTheme)) googleMap.setMapStyle(MapStyleOptions.loadRawResourceStyle(this,R.raw.google_map_dark_style))' "$MAIN"
           grep -q 'else googleMap.setMapStyle(new MapStyleOptions("\[\]"))' "$MAIN"
           grep -q 'if(pile.jobIndexes.size()>5)' "$MAIN"
           grep -q '(j.pay<=0||j.pay>=minPay)' "$MAIN"
           grep -q '#071C2C' "$MAIN"
           python3 -m json.tool "$STYLE" >/dev/null
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.47'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.49'
           MAIN="$MAIN" python3 - <<'PY'
           import os,re
           from pathlib import Path
@@ -67,7 +69,9 @@ jobs:
               decl=re.compile(r'(?m)^[ \t]*(?:public|private|protected)?[ \t]*(?:static[ \t]+)?(?:final[ \t]+)?(?:[\w<>\[\],.?]+[ \t]+)+'+re.escape(name)+r'[ \t]*\(')
               if decl.search(s):
                   raise SystemExit(f'dead method still present: {name}')
-          print('Dead-code cleanup verification passed.')
+          if 'CareerOneStop' in s or 'NLx' in s:
+              raise SystemExit('CareerOneStop/NLx still present')
+          print('Dead-code and CareerOneStop removal verification passed.')
           PY
       - name: Inject Google Maps API key
         shell: bash
@@ -103,16 +107,16 @@ jobs:
           B=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
           U=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
           test -n "$U"
-          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.47-release-signed.apk"
+          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.49-release-signed.apk"
           keytool -genkeypair -keystore "$K" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -alias jobbubble -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=JobBubble, OU=Android, O=JobBubble, C=US"
           "$ANDROID_HOME/build-tools/$B/zipalign" -f -p 4 "$U" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" sign --ks "$K" --ks-key-alias jobbubble --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEYSTORE_PASSWORD" --out "$S" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" verify --verbose "$S"
-          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk"
-          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.49-release-signed.apk"
+          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.49-release-signed.apk" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.47-release-signed
+          name: JobBubble-V9.4.49-release-signed
           path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
