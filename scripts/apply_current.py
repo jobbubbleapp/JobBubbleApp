@@ -21,7 +21,7 @@ steps = [
     'v954_compact_map_ui.py',
     'v955_fix_compact_marker_compile.py',
     'v956_unknown_pay_detail_label.py',
-    'inspect_category_icons.py',
+    'v957_logo_category_fallback.py',
 ]
 
 for script in steps:
