@@ -104,6 +104,16 @@ jobs:
           raise SystemExit('missing text '+n)
           PY
           }
+          tap_desc(){ python3 - "$1" "$2" <<'PY'
+          import re,sys,subprocess
+          n,p=sys.argv[1:]; s=open(p).read()
+          for x in re.findall(r'<node[^>]*>',s):
+              d=re.search(r'content-desc="([^"]*)"',x); b=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',x)
+              if d and b and d.group(1).casefold()==n.casefold():
+                  subprocess.run(['adb','shell','input','tap',str((int(b[1])+int(b[3]))//2),str((int(b[2])+int(b[4]))//2)],check=True,timeout=8); raise SystemExit
+          raise SystemExit('missing desc '+n)
+          PY
+          }
           adb wait-for-device
           adb shell settings put global window_animation_scale 0; adb shell settings put global transition_animation_scale 0; adb shell settings put global animator_duration_scale 0
           adb emu geo fix -122.2021 47.9780 || true
@@ -125,8 +135,20 @@ jobs:
 
           tap_id sourceChip "$RUNNER_TEMP/main.xml"; sleep 1; ui source; tap_text 'The Muse' "$RUNNER_TEMP/source.xml"; sleep 1; ui source2; grep -q 'Apply' "$RUNNER_TEMP/source2.xml" && tap_text 'Apply' "$RUNNER_TEMP/source2.xml"
           sleep 3; ui main2; grep -q 'The Muse' "$RUNNER_TEMP/main2.xml"
-          tap_id distanceValue "$RUNNER_TEMP/main2.xml"; sleep 1; ui dist; tap_text '100' "$RUNNER_TEMP/dist.xml"; sleep 1; ui dist2; grep -q 'Apply' "$RUNNER_TEMP/dist2.xml" && tap_text 'Apply' "$RUNNER_TEMP/dist2.xml"
-          sleep 3; ui main3; grep -Eq '100 ?mi|100 miles' "$RUNNER_TEMP/main3.xml"; grep -q 'The Muse' "$RUNNER_TEMP/main3.xml"
+
+          tap_id distanceValue "$RUNNER_TEMP/main2.xml"; sleep 1; ui dist
+          tap_desc miles "$RUNNER_TEMP/dist.xml"
+          adb shell input keyevent KEYCODE_MOVE_END || true
+          for _ in $(seq 1 6); do adb shell input keyevent KEYCODE_DEL; done
+          adb shell input text 100
+          adb shell input keyevent 4
+          sleep 1; ui dist2
+          grep -q '100' "$RUNNER_TEMP/dist2.xml"
+          tap_text Apply "$RUNNER_TEMP/dist2.xml"
+          sleep 3; ui main3
+          grep -Eq '100 ?mi|100 miles' "$RUNNER_TEMP/main3.xml"
+          grep -q 'The Muse' "$RUNNER_TEMP/main3.xml"
+
           sleep 25; ui loaded; tap_id navList "$RUNNER_TEMP/loaded.xml"; sleep 5; ui list; timeout 10s adb exec-out screencap -p > "$RUNNER_TEMP/list.png" || true
           python3 - <<'PY'
           import os,re,html
@@ -167,7 +189,9 @@ jobs:
             ${{ runner.temp }}/main2.xml
             ${{ runner.temp }}/main3.xml
             ${{ runner.temp }}/source.xml
+            ${{ runner.temp }}/source2.xml
             ${{ runner.temp }}/dist.xml
+            ${{ runner.temp }}/dist2.xml
             ${{ runner.temp }}/loaded.xml
             ${{ runner.temp }}/list.xml
             ${{ runner.temp }}/muse.txt
