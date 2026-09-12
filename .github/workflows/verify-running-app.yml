@@ -19,6 +19,27 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Free runner storage
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo '=== DISK BEFORE ==='; df -h
+          sudo rm -rf /usr/local/lib/android/sdk/ndk || true
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          echo '=== DISK AFTER ==='; df -h
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+            ls -l /dev/kvm
+          else
+            echo 'WARNING: /dev/kvm is unavailable; emulator will use software acceleration.'
+          fi
       - name: Extract and patch project
         id: project
         shell: bash
@@ -55,29 +76,40 @@ jobs:
           PY
       - name: Build debug APK
         working-directory: ${{ steps.project.outputs.project_dir }}
-        run: chmod +x gradlew && ./gradlew --no-daemon assembleDebug
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        run: chmod +x gradlew && ./gradlew --no-daemon --max-workers=2 assembleDebug
       - name: Prepare UI verification script
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/verify.sh" <<'SH'
           #!/usr/bin/env bash
           set -euxo pipefail
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell input keyevent 82 || true
           APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
-          adb install -r "$APK"
+          adb install -r -g "$APK"
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
-          test -x "$AAPT"
           PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
           ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
           echo "PACKAGE=$PKG ACTIVITY=$ACT"
+          adb logcat -c
           adb shell am force-stop "$PKG"
           adb shell am start -W -n "$PKG/$ACT"
-          sleep 12
-          adb shell uiautomator dump /sdcard/window.xml || true
+          for i in $(seq 1 30); do
+            adb shell dumpsys window windows | grep -q "$PKG" && break
+            sleep 1
+          done
+          sleep 5
+          adb shell uiautomator dump --compressed /sdcard/window.xml || true
           adb pull /sdcard/window.xml "$RUNNER_TEMP/window-initial.xml" || true
           adb exec-out screencap -p > "$RUNNER_TEMP/initial.png"
-          echo '=== INITIAL UI ==='
-          cat "$RUNNER_TEMP/window-initial.xml" || true
+          echo '=== INITIAL UI ==='; cat "$RUNNER_TEMP/window-initial.xml" || true
           for text in 'Continue as Guest' 'Guest' 'Continue' 'Skip'; do
             if grep -q "$text" "$RUNNER_TEMP/window-initial.xml" 2>/dev/null; then
               python3 - "$text" "$RUNNER_TEMP/window-initial.xml" <<'PY'
@@ -89,15 +121,15 @@ jobs:
               x=(int(m[1])+int(m[3]))//2; y=(int(m[2])+int(m[4]))//2
               subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
           PY
-              sleep 6; break
+              sleep 4; break
             fi
           done
-          adb shell uiautomator dump /sdcard/window.xml || true
+          adb shell uiautomator dump --compressed /sdcard/window.xml || true
           adb pull /sdcard/window.xml "$RUNNER_TEMP/window-main.xml" || true
           adb exec-out screencap -p > "$RUNNER_TEMP/main.png"
           echo '=== MAIN UI ==='; cat "$RUNNER_TEMP/window-main.xml" || true
           echo '=== APP LOGS / MUSE ==='
-          adb logcat -d | grep -i -E 'jobbubble|muse|job|refin|error|exception' | tail -n 500 || true
+          adb logcat -d -v brief | grep -i -E 'jobbubble|muse|job|refin|error|exception' | tail -n 300 || true
           python3 - <<'PY'
           import re,html,os
           p=os.environ['RUNNER_TEMP']+'/window-main.xml'
@@ -112,13 +144,19 @@ jobs:
           PY
           SH
           chmod +x "$RUNNER_TEMP/verify.sh"
-      - name: Run Android emulator and verify live UI
+      - name: Run accelerated Android emulator and verify live UI
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
-          profile: pixel_6
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          disk-size: 4096M
           disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-snapshot -wipe-data
           script: bash "$RUNNER_TEMP/verify.sh"
       - name: Upload verification evidence
         if: always()
