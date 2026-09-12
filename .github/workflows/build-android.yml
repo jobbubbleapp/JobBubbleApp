@@ -60,13 +60,17 @@ jobs:
           grep -q 'float markerAnchorY=0.722f' "$MAIN"
           grep -q 'See listing for pay' "$MAIN"
           grep -q 'requestCompanyLogo(j.company)' "$MAIN"
-          grep -q 'String categoryIcon=choiceIcon' "$MAIN"
+          grep -q 'isUsableCompanyLogo(logo)' "$MAIN"
+          grep -q 'drawCategoryBubbleIcon(c,j,cx,cy)' "$MAIN"
+          grep -q 'private String bubbleIconFamily(Job j)' "$MAIN"
+          grep -q 'return "community"' "$MAIN"
           grep -q 'return "🚚"' "$MAIN"
           grep -q 'return "🛡"' "$MAIN"
           grep -q 'return "💻"' "$MAIN"
           grep -q 'return "📦"' "$MAIN"
+          ! grep -q 'c.drawText(categoryIcon' "$MAIN"
           python3 -m json.tool "$STYLE" >/dev/null
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.57'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.58'
           MAIN="$MAIN" python3 - <<'PY'
           import os,re
           from pathlib import Path
@@ -122,16 +126,16 @@ jobs:
           B=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
           U=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
           test -n "$U"
-          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.57-release-signed.apk"
+          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.58-release-signed.apk"
           keytool -genkeypair -keystore "$K" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -alias jobbubble -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=JobBubble, OU=Android, O=JobBubble, C=US"
           "$ANDROID_HOME/build-tools/$B/zipalign" -f -p 4 "$U" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" sign --ks "$K" --ks-key-alias jobbubble --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEYSTORE_PASSWORD" --out "$S" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" verify --verbose "$S"
-          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.57-release-signed.apk"
-          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.57-release-signed.apk" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.58-release-signed.apk"
+          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.58-release-signed.apk" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.57-release-signed
+          name: JobBubble-V9.4.58-release-signed
           path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
