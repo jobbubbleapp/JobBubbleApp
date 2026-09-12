@@ -1,0 +1,21 @@
+name: Diagnose Live Muse Final
+on:
+  push:
+    branches: [ feature/code-cleanup-v948 ]
+    paths: [ '.github/workflows/diagnose-live-muse-final.yml' ]
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect backend response
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json,urllib.request
+          u='https://jobbubble-backend-1.onrender.com/jobs?where=Everett%2C+WA&lat=47.9780&lon=-122.2021&radius=100&source=themuse'
+          with urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'JobBubble-final-diagnostic'}),timeout=90) as r: d=json.load(r)
+          print('root keys', sorted(d.keys()))
+          print('search origin', d.get('search_origin'), 'refining',d.get('location_refining'))
+          for i,j in enumerate(d.get('jobs') or []):
+              print(i, json.dumps({k:j.get(k) for k in ['title','source','latitude','longitude','salary_min','salary_period','category','location','location_precision','location_approximate']},ensure_ascii=False))
+          PY
