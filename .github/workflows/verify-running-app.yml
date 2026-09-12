@@ -60,6 +60,7 @@ jobs:
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/verify.sh" <<'SH'
+          #!/usr/bin/env bash
           set -euxo pipefail
           APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           adb install -r "$APK"
