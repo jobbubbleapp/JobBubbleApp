@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - feature/dark-theme-muse-verification
+      - feature/code-cleanup-v948
     paths:
       - '**/*.zip'
       - 'scripts/**'
@@ -36,14 +37,12 @@ jobs:
           GRADLEW=$(find "$RUNNER_TEMP/jobbubble-project" -type f -name gradlew -print -quit)
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
-      - name: Apply and verify V9.4.47 changes
+      - name: Apply current patches and verify cleanup
         shell: bash
         run: |
           set -euo pipefail
           P="${{ steps.project.outputs.project_dir }}"
-          python3 scripts/v943_patch.py "$P"
-          python3 scripts/v944_patch.py "$P"
-          python3 scripts/v947_patch.py "$P"
+          python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           STYLE="$P/app/src/main/res/raw/google_map_dark_style.json"
           grep -q 'The Muse' "$MAIN"
@@ -54,6 +53,22 @@ jobs:
           grep -q '#071C2C' "$MAIN"
           python3 -m json.tool "$STYLE" >/dev/null
           test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.47'
+          MAIN="$MAIN" python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          s=Path(os.environ['MAIN']).read_text(encoding='utf-8')
+          removed=[
+            'addForeignCountryLabel','bboxIntersects','bestAddressText','chooseCompanyLocation',
+            'correctJobCoordinates','followJob','isGenericCompanyName','ovalStrokeBg',
+            'renderExpandedPile','shortCompanyName','tileYToLatitude','violetGlassBg',
+            'chooseBestListingLocation','companyTokensMatch','looksLikeStreetAddress'
+          ]
+          for name in removed:
+              decl=re.compile(r'(?m)^[ \t]*(?:public|private|protected)?[ \t]*(?:static[ \t]+)?(?:final[ \t]+)?(?:[\w<>\[\],.?]+[ \t]+)+'+re.escape(name)+r'[ \t]*\(')
+              if decl.search(s):
+                  raise SystemExit(f'dead method still present: {name}')
+          print('Dead-code cleanup verification passed.')
+          PY
       - name: Inject Google Maps API key
         shell: bash
         env:
@@ -101,5 +116,3 @@ jobs:
           path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
-
-# Parallel release build trigger for final verification cycle.
