@@ -27,6 +27,7 @@ steps = [
     'v960_unified_category_vectors.py',
     'v961_group_company_logos.py',
     'v962_top_safe_area.py',
+    'v963_filter_control_clipping_fix.py',
 ]
 
 for script in steps:
