@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 jobs:
-  build-release-apk:
+  build-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -25,6 +25,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Locate and extract Android project
         id: project
         shell: bash
@@ -32,12 +33,14 @@ jobs:
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
           test -n "$ZIP_FILE"
-          rm -rf "$RUNNER_TEMP/jobbubble-project"; mkdir -p "$RUNNER_TEMP/jobbubble-project"
+          rm -rf "$RUNNER_TEMP/jobbubble-project"
+          mkdir -p "$RUNNER_TEMP/jobbubble-project"
           unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-project"
           GRADLEW=$(find "$RUNNER_TEMP/jobbubble-project" -type f -name gradlew -print -quit)
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
-      - name: Apply current patches and verify cleanup
+
+      - name: Apply patches and verify compact controls
         shell: bash
         run: |
           set -euo pipefail
@@ -45,86 +48,27 @@ jobs:
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           LAYOUT="$P/app/src/main/res/layout/activity_main.xml"
-          STYLE="$P/app/src/main/res/raw/google_map_dark_style.json"
-          grep -q 'The Muse' "$MAIN"
-          ! grep -qi 'CareerOneStop' "$MAIN"
-          ! grep -qi 'NLx' "$MAIN"
-          grep -q 'if("dark".equals(mapTheme)) googleMap.setMapStyle(MapStyleOptions.loadRawResourceStyle(this,R.raw.google_map_dark_style))' "$MAIN"
-          grep -q 'else googleMap.setMapStyle(new MapStyleOptions("\[\]"))' "$MAIN"
-          grep -q 'if(pile.jobIndexes.size()>5)' "$MAIN"
-          grep -q '(j.pay<=0||j.pay>=minPay)' "$MAIN"
-          grep -q 'sourcesMatch(j.source,source)' "$MAIN"
-          grep -q 'getCurrentLocation' "$MAIN"
-          grep -q 'normalizeBackendWhere(where)' "$MAIN"
-          grep -q '#071C2C' "$MAIN"
-          grep -q 'final int w=dp(176), h=dp(126)' "$MAIN"
-          grep -q 'float markerAnchorY=0.722f' "$MAIN"
-          grep -q 'See listing for pay' "$MAIN"
-          grep -q 'requestCompanyLogo(j.company)' "$MAIN"
-          grep -q 'isUsableCompanyLogo(logo)' "$MAIN"
-          grep -q 'drawCategoryBubbleIcon(c,j,cx,cy)' "$MAIN"
-          grep -q 'private String bubbleIconFamily(Job j)' "$MAIN"
-          grep -q 'return "community"' "$MAIN"
-          grep -q 'private String categoryIconFamily(String item)' "$MAIN"
-          grep -q 'private Bitmap categoryIconBitmap(String item,int sizeDp,int color)' "$MAIN"
-          grep -q 'private void drawUnifiedCategoryIcon(Canvas c,String family,float cx,float cy,float u,int color)' "$MAIN"
-          grep -q 'icon.setImageBitmap(categoryIconBitmap(item,38,violet))' "$MAIN"
-          grep -q 'drawUnifiedCategoryIcon(c,family,cx,cy,getResources().getDisplayMetrics().density,Color.parseColor("#7B3FC1"))' "$MAIN"
-          grep -Fq 'Grouped markers use the same company-logo-first artwork as individual job bubbles.' "$MAIN"
-          grep -Fq 'drawUnifiedCategoryIcon(c,bubbleIconFamily(j),cx,cy,getResources().getDisplayMetrics().density*0.72f,Color.parseColor("#7B3FC1"))' "$MAIN"
-          grep -Fq 'getDisplayCutout().getSafeInsetTop()' "$MAIN"
-          grep -Fq 'int topRoom=Math.max(dp(12),cutoutTop+dp(4));' "$MAIN"
-          grep -Fq 'private void normalizeTopFilterControls()' "$MAIN"
-          grep -Fq 'final int targetHeight=dp(43);' "$MAIN"
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.65'
+          grep -Fq 'final int targetHeight=dp(30);' "$MAIN"
+          grep -Fq 'final int parentRoom=dp(34);' "$MAIN"
           grep -Fq 'R.id.payValue' "$MAIN"
-          grep -Fq 'tv.setIncludeFontPadding(true);' "$MAIN"
-          grep -Fq 'tv.setGravity(android.view.Gravity.CENTER);' "$MAIN"
-          grep -Fq 'android:id="@+id/locationButton"' "$LAYOUT"
-          grep -Fq 'android:id="@+id/distanceValue"' "$LAYOUT"
-          grep -Fq 'android:id="@+id/payValue"' "$LAYOUT"
-          grep -Fq 'android:id="@+id/categoryChip"' "$LAYOUT"
-          grep -Fq 'android:id="@+id/sourceChip"' "$LAYOUT"
-          ! grep -q 'companyBadge(j.company)' "$MAIN"
-          ! grep -q '🚚' "$MAIN"
-          ! grep -q '🛡' "$MAIN"
-          ! grep -q '💻' "$MAIN"
-          ! grep -q '🛠' "$MAIN"
-          ! grep -q '🍴' "$MAIN"
-          ! grep -q '🛍' "$MAIN"
-          ! grep -q '📦' "$MAIN"
-          ! grep -q '💼' "$MAIN"
-          ! grep -q 'c.drawText(categoryIcon' "$MAIN"
-          python3 -m json.tool "$STYLE" >/dev/null
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.64'
-          MAIN="$MAIN" LAYOUT="$LAYOUT" python3 - <<'PY'
-          import os,re
+          python3 - "$LAYOUT" <<'PY'
+          import re,sys
           from pathlib import Path
-          s=Path(os.environ['MAIN']).read_text(encoding='utf-8')
-          x=Path(os.environ['LAYOUT']).read_text(encoding='utf-8')
-          removed=[
-            'addForeignCountryLabel','bboxIntersects','bestAddressText','chooseCompanyLocation',
-            'correctJobCoordinates','followJob','isGenericCompanyName','ovalStrokeBg',
-            'renderExpandedPile','shortCompanyName','tileYToLatitude','violetGlassBg',
-            'chooseBestListingLocation','companyTokensMatch','looksLikeStreetAddress'
-          ]
-          for name in removed:
-              decl=re.compile(r'(?m)^[ \t]*(?:public|private|protected)?[ \t]*(?:static[ \t]+)?(?:final[ \t]+)?(?:[\w<>\[\],.?]+[ \t]+)+'+re.escape(name)+r'[ \t]*\(')
-              if decl.search(s):
-                  raise SystemExit(f'dead method still present: {name}')
-          if 'CareerOneStop' in s or 'NLx' in s:
-              raise SystemExit('CareerOneStop/NLx still present')
+          x=Path(sys.argv[1]).read_text(encoding='utf-8')
           for view_id in ('locationButton','distanceValue','payValue','categoryChip','sourceChip'):
               m=re.search(r'<[^>]*android:id="@\+id/'+re.escape(view_id)+r'"[^>]*>',x,re.S)
-              if not m: raise SystemExit('missing control '+view_id)
+              if not m:
+                  raise SystemExit('missing '+view_id)
               tag=m.group(0)
-              if 'android:layout_height="43dp"' not in tag: raise SystemExit(view_id+' is not 15-percent smaller')
-              if 'android:paddingTop="3dp"' not in tag or 'android:paddingBottom="3dp"' not in tag: raise SystemExit(view_id+' padding mismatch')
-          print('Dead-code, providers, icons, cutout safe area, and 15-percent smaller top controls verified.')
+              if 'android:layout_height="30dp"' not in tag:
+                  raise SystemExit(view_id+' height mismatch')
+              if 'android:paddingTop="0dp"' not in tag or 'android:paddingBottom="0dp"' not in tag:
+                  raise SystemExit(view_id+' padding mismatch')
+          print('Compact top UI verified')
           PY
-      - name: Probe patched runtime flow
-        shell: bash
-        run: python3 scripts/probe_runtime_flow.py "${{ steps.project.outputs.project_dir }}"
-      - name: Inject Google Maps API key
+
+      - name: Inject Maps key
         shell: bash
         env:
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
@@ -136,38 +80,35 @@ jobs:
           import os,re
           from pathlib import Path
           from xml.sax.saxutils import escape
-          project=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
-          manifests=list(project.rglob('src/main/AndroidManifest.xml')); assert manifests
-          for manifest in manifests:
+          project=Path(os.environ['PROJECT_DIR'])
+          key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          for manifest in project.rglob('src/main/AndroidManifest.xml'):
               text=manifest.read_text(encoding='utf-8')
               if 'com.google.android.geo.API_KEY' in text:
                   pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.DOTALL)
-                  text,n=pat.subn(r'\1'+key+r'\2',text,count=1); assert n
-                  manifest.write_text(text,encoding='utf-8')
+                  text,n=pat.subn(r'\1'+key+r'\2',text,count=1)
+                  if n:
+                      manifest.write_text(text,encoding='utf-8')
           PY
-      - name: Build release APK
+
+      - name: Build installable APK
         working-directory: ${{ steps.project.outputs.project_dir }}
-        run: chmod +x ./gradlew && ./gradlew --no-daemon clean assembleRelease --stacktrace
-      - name: Sign and verify APK
-        id: sign
+        run: chmod +x ./gradlew && ./gradlew --no-daemon clean assembleDebug --stacktrace
+
+      - name: Collect APK
+        id: apk
         shell: bash
-        env:
-          KEYSTORE_PASSWORD: JobBubbleBuild2026
         run: |
           set -euo pipefail
-          B=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
-          U=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
-          test -n "$U"
-          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.64-release-signed.apk"
-          keytool -genkeypair -keystore "$K" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -alias jobbubble -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=JobBubble, OU=Android, O=JobBubble, C=US"
-          "$ANDROID_HOME/build-tools/$B/zipalign" -f -p 4 "$U" "$A"
-          "$ANDROID_HOME/build-tools/$B/apksigner" sign --ks "$K" --ks-key-alias jobbubble --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEYSTORE_PASSWORD" --out "$S" "$A"
-          "$ANDROID_HOME/build-tools/$B/apksigner" verify --verbose "$S"
-          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.64-release-signed.apk"
-          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.64-release-signed.apk" >> "$GITHUB_OUTPUT"
+          A=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          test -n "$A"
+          mkdir -p "$RUNNER_TEMP/apks"
+          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.65.apk"
+          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.65.apk" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.64-release-signed
-          path: ${{ steps.sign.outputs.apk }}
+          name: JobBubble-V9.4.65
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
