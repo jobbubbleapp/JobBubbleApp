@@ -1,0 +1,59 @@
+name: Refactor audit
+
+on:
+  push:
+    branches:
+      - refactor/app-cleanup
+    paths:
+      - '.github/workflows/refactor-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Reconstruct current Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jobbubble-project"
+          mkdir -p "$RUNNER_TEMP/jobbubble-project"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-project"
+          GRADLEW=$(find "$RUNNER_TEMP/jobbubble-project" -type f -name gradlew -print -quit)
+          PROJECT_DIR=$(dirname "$GRADLEW")
+          python3 scripts/v943_patch.py "$PROJECT_DIR"
+          python3 scripts/v944_patch.py "$PROJECT_DIR"
+          python3 scripts/v947_patch.py "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - name: Audit potentially dead Java methods
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re, os
+          from pathlib import Path
+          p = Path(os.environ['PROJECT_DIR']) / 'app/src/main/java/com/jobbubble/app/MainActivity.java'
+          text = p.read_text(encoding='utf-8')
+          pattern = re.compile(r'(?m)^\s*private\s+(?:static\s+)?(?:final\s+)?[\w<>\[\].?, ]+\s+(\w+)\s*\([^;{]*\)\s*\{')
+          names = pattern.findall(text)
+          print('POTENTIALLY_DEAD_METHODS')
+          for name in sorted(set(names)):
+              count = len(re.findall(r'\b' + re.escape(name) + r'\b', text))
+              if count == 1:
+                  print(name)
+          print('METHOD_COUNT', len(set(names)))
+          print('SOURCE_LINES', len(text.splitlines()))
+          PY
+      - name: Compile reconstructed app
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
