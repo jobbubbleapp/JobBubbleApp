@@ -25,6 +25,7 @@ steps = [
     'v958_meaningful_category_icons.py',
     'v959_visible_vector_fallback.py',
     'v960_unified_category_vectors.py',
+    'v961_group_company_logos.py',
 ]
 
 for script in steps:
