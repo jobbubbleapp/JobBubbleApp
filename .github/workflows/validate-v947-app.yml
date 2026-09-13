@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - fix/dark-map-v948
+      - fix/coarse-location-v949
     paths:
       - 'scripts/**'
       - '**/*.zip'
@@ -38,10 +38,10 @@ jobs:
           set -euo pipefail
           ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
           test -n "$ZIP_FILE"
-          rm -rf "$RUNNER_TEMP/jobbubble-v948"
-          mkdir -p "$RUNNER_TEMP/jobbubble-v948"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-v948"
-          GRADLEW=$(find "$RUNNER_TEMP/jobbubble-v948" -type f -name gradlew -print -quit)
+          rm -rf "$RUNNER_TEMP/jobbubble-v949"
+          mkdir -p "$RUNNER_TEMP/jobbubble-v949"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-v949"
+          GRADLEW=$(find "$RUNNER_TEMP/jobbubble-v949" -type f -name gradlew -print -quit)
           test -n "$GRADLEW"
           PROJECT_DIR=$(dirname "$GRADLEW")
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
@@ -49,25 +49,26 @@ jobs:
           python3 scripts/v944_patch.py "$PROJECT_DIR"
           python3 scripts/v947_patch.py "$PROJECT_DIR"
           python3 scripts/v948_patch.py "$PROJECT_DIR"
+          python3 scripts/v949_patch.py "$PROJECT_DIR"
 
-      - name: Validate V9.4.48 app wiring
+      - name: Validate V9.4.49 app wiring
         shell: bash
         run: |
           set -euo pipefail
           MAIN="${{ steps.project.outputs.project_dir }}/app/src/main/java/com/jobbubble/app/MainActivity.java"
           GRADLE="${{ steps.project.outputs.project_dir }}/app/build.gradle"
           grep -q 'import com.google.android.gms.maps.model.MapColorScheme;' "$MAIN"
-          grep -q 'googleMap.setMapStyle(null)' "$MAIN"
           grep -q 'googleMap.setMapColorScheme("dark".equals(mapTheme)?MapColorScheme.DARK:MapColorScheme.LIGHT)' "$MAIN"
-          grep -q 'Dark map' "$MAIN"
-          grep -q 'Light map' "$MAIN"
+          grep -q 'boolean fine=ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED;' "$MAIN"
+          grep -q 'boolean coarse=ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED;' "$MAIN"
+          grep -q 'if(fine||coarse)' "$MAIN"
           grep -q '"ATS","Greenhouse","Lever","Ashby"' "$MAIN"
           grep -q 'jobMatchesSelectedSource(Job j)' "$MAIN"
           grep -q 'private void showBugReport()' "$MAIN"
           grep -q '/report-bug' "$MAIN"
           ! grep -q 'No jobs showing' "$MAIN"
-          grep -q "versionName '9.4.48'" "$GRADLE"
-          grep -q 'versionCode 82' "$GRADLE"
+          grep -q "versionName '9.4.49'" "$GRADLE"
+          grep -q 'versionCode 83' "$GRADLE"
 
       - name: Audit dead private methods
         shell: bash
