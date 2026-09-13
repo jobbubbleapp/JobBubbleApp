@@ -44,6 +44,7 @@ jobs:
           P="${{ steps.project.outputs.project_dir }}"
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          LAYOUT="$P/app/src/main/res/layout/activity_main.xml"
           STYLE="$P/app/src/main/res/raw/google_map_dark_style.json"
           grep -q 'The Muse' "$MAIN"
           ! grep -qi 'CareerOneStop' "$MAIN"
@@ -73,6 +74,14 @@ jobs:
           grep -Fq 'drawUnifiedCategoryIcon(c,bubbleIconFamily(j),cx,cy,getResources().getDisplayMetrics().density*0.72f,Color.parseColor("#7B3FC1"))' "$MAIN"
           grep -Fq 'getDisplayCutout().getSafeInsetTop()' "$MAIN"
           grep -Fq 'int topRoom=Math.max(dp(12),cutoutTop+dp(4));' "$MAIN"
+          grep -Fq 'private void normalizeTopFilterControls()' "$MAIN"
+          grep -Fq 'final int targetHeight=dp(56);' "$MAIN"
+          grep -Fq 'tv.setIncludeFontPadding(true);' "$MAIN"
+          grep -Fq 'tv.setGravity(android.view.Gravity.CENTER);' "$MAIN"
+          grep -Fq 'android:id="@+id/locationButton"' "$LAYOUT"
+          grep -Fq 'android:id="@+id/distanceValue"' "$LAYOUT"
+          grep -Fq 'android:id="@+id/categoryChip"' "$LAYOUT"
+          grep -Fq 'android:id="@+id/sourceChip"' "$LAYOUT"
           ! grep -q 'companyBadge(j.company)' "$MAIN"
           ! grep -q '🚚' "$MAIN"
           ! grep -q '🛡' "$MAIN"
@@ -84,7 +93,7 @@ jobs:
           ! grep -q '💼' "$MAIN"
           ! grep -q 'c.drawText(categoryIcon' "$MAIN"
           python3 -m json.tool "$STYLE" >/dev/null
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.61'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.62'
           MAIN="$MAIN" python3 - <<'PY'
           import os,re
           from pathlib import Path
@@ -101,7 +110,7 @@ jobs:
                   raise SystemExit(f'dead method still present: {name}')
           if 'CareerOneStop' in s or 'NLx' in s:
               raise SystemExit('CareerOneStop/NLx still present')
-          print('Dead-code, provider cleanup, unified category icons, grouped company logos, and top safe area verified.')
+          print('Dead-code, providers, icons, cutout safe area, and top filter sizing verified.')
           PY
       - name: Probe patched runtime flow
         shell: bash
@@ -123,7 +132,7 @@ jobs:
           for manifest in manifests:
               text=manifest.read_text(encoding='utf-8')
               if 'com.google.android.geo.API_KEY' in text:
-                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.DOTALL)
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.DOTALL)
                   text,n=pat.subn(r'\1'+key+r'\2',text,count=1); assert n
                   manifest.write_text(text,encoding='utf-8')
           PY
@@ -140,16 +149,16 @@ jobs:
           B=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n1)
           U=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)
           test -n "$U"
-          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.61-release-signed.apk"
+          K="$RUNNER_TEMP/jobbubble-release.jks"; A="$RUNNER_TEMP/aligned.apk"; S="$RUNNER_TEMP/JobBubble-V9.4.62-release-signed.apk"
           keytool -genkeypair -keystore "$K" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -alias jobbubble -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=JobBubble, OU=Android, O=JobBubble, C=US"
           "$ANDROID_HOME/build-tools/$B/zipalign" -f -p 4 "$U" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" sign --ks "$K" --ks-key-alias jobbubble --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEYSTORE_PASSWORD" --out "$S" "$A"
           "$ANDROID_HOME/build-tools/$B/apksigner" verify --verbose "$S"
-          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.61-release-signed.apk"
-          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.61-release-signed.apk" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/apks"; cp "$S" "$RUNNER_TEMP/apks/JobBubble-V9.4.62-release-signed.apk"
+          echo "apk=$RUNNER_TEMP/apks/JobBubble-V9.4.62-release-signed.apk" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.61-release-signed
+          name: JobBubble-V9.4.62-release-signed
           path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           retention-days: 30
