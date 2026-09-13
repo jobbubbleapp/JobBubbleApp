@@ -52,14 +52,14 @@ def replace_method(src, marker, replacement):
         i += 1
     raise SystemExit(f'closing brace not found: {marker}')
 
-# Keep the typography and icon sizes exactly as they are. Only reduce container
-# height/padding while retaining enough room for Android font metrics.
+# Make the containers about 15% shorter than V9.4.63 (50dp -> 43dp).
+# Text sizes, number sizes, typefaces, icon sizes, colors, and backgrounds are untouched.
 replacement = r'''    private void normalizeTopFilterControls(){
-        final int targetHeight=dp(50);
-        final int verticalPad=dp(4);
-        final int horizontalPad=dp(10);
+        final int targetHeight=dp(43);
+        final int verticalPad=dp(3);
+        final int horizontalPad=dp(8);
         final int drawableGap=dp(8);
-        final int parentRoom=dp(54);
+        final int parentRoom=dp(47);
         final int[] ids={R.id.locationButton,R.id.distanceValue,R.id.payValue,R.id.categoryChip,R.id.sourceChip};
         for(int id:ids){
             android.view.View v=findViewById(id);
@@ -74,7 +74,7 @@ replacement = r'''    private void normalizeTopFilterControls(){
 
             if(v instanceof android.widget.TextView){
                 android.widget.TextView tv=(android.widget.TextView)v;
-                // Preserve existing text size/typeface. Only normalize layout behavior.
+                // Preserve existing text size/typeface. Only tighten container geometry.
                 tv.setIncludeFontPadding(true);
                 tv.setGravity(android.view.Gravity.CENTER);
                 tv.setSingleLine(true);
@@ -119,16 +119,14 @@ def set_attr(src, view_id, attr, value):
         tag=tag[:-2]+' '+rep+tag[-2:] if tag.endswith('/>') else tag[:-1]+' '+rep+'>'
     return src[:start]+tag+src[end+1:], True
 
-# Make all five visible top controls compact and consistent. Do not touch
-# textSize, drawable size, typeface, colors, backgrounds, radii, or borders.
 for view_id in ('locationButton','distanceValue','payValue','categoryChip','sourceChip'):
     for attr,value in (
-        ('layout_height','50dp'),
-        ('minHeight','50dp'),
-        ('paddingTop','4dp'),
-        ('paddingBottom','4dp'),
-        ('paddingLeft','10dp'),
-        ('paddingRight','10dp'),
+        ('layout_height','43dp'),
+        ('minHeight','43dp'),
+        ('paddingTop','3dp'),
+        ('paddingBottom','3dp'),
+        ('paddingLeft','8dp'),
+        ('paddingRight','8dp'),
         ('gravity','center'),
     ):
         xml,ok=set_attr(xml,view_id,attr,value)
@@ -137,5 +135,5 @@ for view_id in ('locationButton','distanceValue','payValue','categoryChip','sour
 
 main.write_text(text,encoding='utf-8')
 layout.write_text(xml,encoding='utf-8')
-version.write_text('9.4.63\n',encoding='utf-8')
-print('Applied V9.4.63 compact top controls with unchanged typography and icon sizing')
+version.write_text('9.4.64\n',encoding='utf-8')
+print('Applied V9.4.64 top controls about 15% smaller with unchanged typography and icon sizing')
