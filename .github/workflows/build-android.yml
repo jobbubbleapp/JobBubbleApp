@@ -40,7 +40,7 @@ jobs:
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
 
-      - name: Apply patches and verify compact controls
+      - name: Apply patches and verify V9.4.66
         shell: bash
         run: |
           set -euo pipefail
@@ -48,7 +48,9 @@ jobs:
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           LAYOUT="$P/app/src/main/res/layout/activity_main.xml"
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.65'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.66'
+
+          # Preserve the compact top filter UI exactly as requested.
           grep -Fq 'final int targetHeight=dp(30);' "$MAIN"
           grep -Fq 'final int parentRoom=dp(34);' "$MAIN"
           grep -Fq 'R.id.payValue' "$MAIN"
@@ -66,6 +68,30 @@ jobs:
               if 'android:paddingTop="0dp"' not in tag or 'android:paddingBottom="0dp"' not in tag:
                   raise SystemExit(view_id+' padding mismatch')
           print('Compact top UI verified')
+          PY
+
+          # Help & Support must expose the public privacy/support/deletion pages.
+          grep -Fq 'private void showHelpSupport()' "$MAIN"
+          grep -Fq 'Privacy Policy' "$MAIN"
+          grep -Fq 'Delete Account & Data' "$MAIN"
+          grep -Fq 'https://jobbubble-support.onrender.com/privacy.html' "$MAIN"
+          grep -Fq 'https://jobbubble-support.onrender.com/support.html' "$MAIN"
+          grep -Fq 'https://jobbubble-support.onrender.com/delete-account.html' "$MAIN"
+
+          # Employer logos are disabled in rendering; JobBubble category vectors are the only job artwork.
+          grep -Fq 'drawCategoryBubbleIcon(c,j,cx,cy);' "$MAIN"
+          grep -Fq 'drawUnifiedCategoryIcon(c,bubbleIconFamily(j),cx,cy' "$MAIN"
+          python3 - "$MAIN" <<'PY'
+          import sys
+          from pathlib import Path
+          x=Path(sys.argv[1]).read_text(encoding='utf-8')
+          request=[ln.strip() for ln in x.splitlines() if 'requestCompanyLogo(' in ln and 'void requestCompanyLogo(' not in ln]
+          read=[ln.strip() for ln in x.splitlines() if 'getCompanyLogo(' in ln and 'Bitmap getCompanyLogo(' not in ln]
+          if request:
+              raise SystemExit('active company-logo requests remain: '+str(request[:5]))
+          if read:
+              raise SystemExit('active company-logo reads remain: '+str(read[:5]))
+          print('Category-only job artwork verified')
           PY
 
       - name: Inject Maps key
@@ -103,12 +129,12 @@ jobs:
           A=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           test -n "$A"
           mkdir -p "$RUNNER_TEMP/apks"
-          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.65.apk"
-          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.65.apk" >> "$GITHUB_OUTPUT"
+          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.66.apk"
+          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.66.apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.65
+          name: JobBubble-V9.4.66
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
