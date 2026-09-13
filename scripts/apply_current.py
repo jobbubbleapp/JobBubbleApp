@@ -28,6 +28,7 @@ steps = [
     'v961_group_company_logos.py',
     'v962_top_safe_area.py',
     'v963_filter_control_clipping_fix.py',
+    'v964_compact_top_controls.py',
 ]
 
 for script in steps:
