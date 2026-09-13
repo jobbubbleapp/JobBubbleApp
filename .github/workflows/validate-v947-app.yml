@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           MAIN="${{ steps.project.outputs.project_dir }}/app/src/main/java/com/jobbubble/app/MainActivity.java"
           GRADLE="${{ steps.project.outputs.project_dir }}/app/build.gradle"
-          grep -q 'import com.google.android.gms.maps.MapColorScheme;' "$MAIN"
+          grep -q 'import com.google.android.gms.maps.model.MapColorScheme;' "$MAIN"
           grep -q 'googleMap.setMapStyle(null)' "$MAIN"
           grep -q 'googleMap.setMapColorScheme("dark".equals(mapTheme)?MapColorScheme.DARK:MapColorScheme.LIGHT)' "$MAIN"
           grep -q 'Dark map' "$MAIN"
