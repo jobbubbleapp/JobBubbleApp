@@ -12,11 +12,11 @@ s = java.read_text(encoding='utf-8')
 # Maps SDK 19.0.0 has a native dark/light color scheme. V9.4.43 intentionally
 # forced googleMap.setMapStyle(null), which left the base map light even when
 # JobBubble's dark appearance was selected. Restore a real map theme here.
-if 'import com.google.android.gms.maps.MapColorScheme;' not in s:
+if 'import com.google.android.gms.maps.model.MapColorScheme;' not in s:
     anchor = 'import com.google.android.gms.maps.GoogleMap;\n'
     if anchor not in s:
         raise SystemExit('GoogleMap import target not found')
-    s = s.replace(anchor, anchor + 'import com.google.android.gms.maps.MapColorScheme;\n', 1)
+    s = s.replace(anchor, anchor + 'import com.google.android.gms.maps.model.MapColorScheme;\n', 1)
 
 old_theme = '''    private void applyMapTheme(){
         if(!mapReady || googleMap==null)return;
