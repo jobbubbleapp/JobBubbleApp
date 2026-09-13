@@ -62,21 +62,32 @@ jobs:
           PROJECT_DIR=$(dirname "$GRADLEW")
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Apply V9.4.46 app changes
+      - name: Apply V9.4.47 app changes
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/v943_patch.py "${{ steps.gradle_project.outputs.project_dir }}"
-          python3 scripts/v944_patch.py "${{ steps.gradle_project.outputs.project_dir }}"
-          MAIN="${{ steps.gradle_project.outputs.project_dir }}/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          PROJECT="${{ steps.gradle_project.outputs.project_dir }}"
+          python3 scripts/v943_patch.py "$PROJECT"
+          python3 scripts/v944_patch.py "$PROJECT"
+          python3 scripts/v947_patch.py "$PROJECT"
+          MAIN="$PROJECT/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          GRADLE="$PROJECT/app/build.gradle"
           grep -q 'The Muse' "$MAIN"
-          grep -q 'Licenses & Data Sources' "$MAIN"
-          grep -q 'Help & Support' "$MAIN"
+          grep -q '"ATS","Greenhouse","Lever","Ashby"' "$MAIN"
+          grep -q 'jobMatchesSelectedSource(Job j)' "$MAIN"
+          grep -q 'private void showBugReport()' "$MAIN"
+          grep -q '/report-bug' "$MAIN"
+          grep -q 'Report a bug' "$MAIN"
+          grep -q 'App information' "$MAIN"
+          grep -q 'Privacy' "$MAIN"
           grep -q 'Log Out' "$MAIN"
           grep -q 'googleMap.setMapStyle(null)' "$MAIN"
           grep -q '(j.pay<=0||j.pay>=minPay)' "$MAIN"
           grep -q 'if(pile.jobIndexes.size()>5)' "$MAIN"
-          ! grep -q 'final String\[\] choices={"All sources","Adzuna","USAJOBS","CareerOneStop"}' "$MAIN"
+          ! grep -q 'No jobs showing' "$MAIN"
+          ! grep -q 'Job location looks approximate' "$MAIN"
+          grep -q "versionName '9.4.47'" "$GRADLE"
+          grep -q 'versionCode 81' "$GRADLE"
 
       - name: Inject Google Maps API key
         shell: bash
@@ -145,8 +156,8 @@ jobs:
           fi
 
           KEYSTORE="$RUNNER_TEMP/jobbubble-release.jks"
-          ALIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.46-release-aligned.apk"
-          SIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.46-release-signed.apk"
+          ALIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.47-release-aligned.apk"
+          SIGNED_APK="$RUNNER_TEMP/JobBubble-V9.4.47-release-signed.apk"
 
           keytool -genkeypair -v \
             -keystore "$KEYSTORE" \
@@ -169,13 +180,13 @@ jobs:
 
           "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
           mkdir -p "$RUNNER_TEMP/apks"
-          cp "$SIGNED_APK" "$RUNNER_TEMP/apks/JobBubble-V9.4.46-release-signed.apk"
-          echo "signed_apk=$RUNNER_TEMP/apks/JobBubble-V9.4.46-release-signed.apk" >> "$GITHUB_OUTPUT"
+          cp "$SIGNED_APK" "$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk"
+          echo "signed_apk=$RUNNER_TEMP/apks/JobBubble-V9.4.47-release-signed.apk" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.46-release-signed
+          name: JobBubble-V9.4.47-release-signed
           path: ${{ steps.sign_apk.outputs.signed_apk }}
           if-no-files-found: error
           retention-days: 30

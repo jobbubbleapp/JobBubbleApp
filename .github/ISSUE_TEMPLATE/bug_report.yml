@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a problem with JobBubble
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you were doing when it occurred.
+      placeholder: Tell us what went wrong.
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: JobBubble version
+      placeholder: e.g. 9.4.47
+  - type: input
+    id: android_version
+    attributes:
+      label: Android version
+  - type: input
+    id: device
+    attributes:
+      label: Device model
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Optional screenshots or extra details.
