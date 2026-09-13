@@ -99,21 +99,8 @@ print(f'Removed {len(_dead_methods)} dead MainActivity methods')
 
 patch.write_text(s.rstrip() + cleanup + '\n', encoding='utf-8')
 
-for workflow in [
-    Path('.github/workflows/build-android.yml'),
-    Path('.github/workflows/validate-v947-app.yml'),
-    Path('.github/workflows/export-source.yml'),
-]:
-    if not workflow.exists():
-        continue
-    text = workflow.read_text(encoding='utf-8')
-    text = text.replace('actions/checkout@v4', 'actions/checkout@v5')
-    text = text.replace('actions/setup-java@v4', 'actions/setup-java@v5')
-    workflow.write_text(text, encoding='utf-8')
-
 for dead in [
     Path('scripts/v942_patch.py'),
-    Path('.github/workflows/inspect-job-display.yml'),
     Path('JobBubble-V9.4.40-USA-ONLY-MAPS-debug.apk'),
 ]:
     if dead.exists():
