@@ -34,6 +34,13 @@ needles = [
     'showChoiceMenu(',
     'drawCategoryBubbleIcon(',
     'bubbleIconFamily(',
+    'requestCompanyLogo(',
+    'getCompanyLogo(',
+    'isUsableCompanyLogo(',
+    'companyLogoCache',
+    'logoUrl',
+    'favicon',
+    'clearbit',
     'payText',
     'payLabel',
     'Pay not listed',
@@ -50,9 +57,9 @@ for needle in needles:
         continue
     print(f'\n--- {needle!r}: {len(hits)} hit(s) ---')
     for i in hits[:8]:
-        if needle == 'makeJobPileBitmap(':
-            start = max(0, i - 5)
-            end = min(len(lines), i + 120)
+        if needle in ('makeJobPileBitmap(', 'requestCompanyLogo(', 'getCompanyLogo('):
+            start = max(0, i - 8)
+            end = min(len(lines), i + 150)
         else:
             start = max(0, i - 18)
             end = min(len(lines), i + 42)
