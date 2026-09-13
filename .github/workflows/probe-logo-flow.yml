@@ -1,0 +1,35 @@
+name: Probe JobBubble Logo Flow
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/code-cleanup-v948
+    paths:
+      - '.github/workflows/probe-logo-flow.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and patch project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          test -n "$ZIP_FILE"
+          mkdir -p "$RUNNER_TEMP/jobbubble-project"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jobbubble-project"
+          GRADLEW=$(find "$RUNNER_TEMP/jobbubble-project" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+      - name: Probe logo methods
+        shell: bash
+        run: python3 scripts/probe_runtime_flow.py "${{ steps.project.outputs.project_dir }}"
