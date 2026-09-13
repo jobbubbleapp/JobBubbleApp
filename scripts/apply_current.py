@@ -26,6 +26,7 @@ steps = [
     'v959_visible_vector_fallback.py',
     'v960_unified_category_vectors.py',
     'v961_group_company_logos.py',
+    'v962_top_safe_area.py',
 ]
 
 for script in steps:
