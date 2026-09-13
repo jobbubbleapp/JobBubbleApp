@@ -30,6 +30,7 @@ steps = [
     'v963_filter_control_clipping_fix.py',
     'v964_compact_top_controls.py',
     'v965_half_height_top_controls.py',
+    'v966a_disable_logo_request.py',
     'v966_legal_help_no_company_logos.py',
 ]
 
