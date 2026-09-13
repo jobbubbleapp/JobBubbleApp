@@ -56,13 +56,13 @@ jobs:
           chmod +x "$PROJECT_DIR/gradlew"
           cd "$PROJECT_DIR"
           ./gradlew --no-daemon assembleDebug
-      - name: Commit refactor
+      - name: Commit tested source cleanup
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f .github/workflows/refactor-audit.yml .github/workflows/refactor-app-once.yml scripts/refactor_app_once.py
+          git rm -f scripts/refactor_app_once.py
           git add -A
-          git commit -m "Refactor Android build and remove dead app code"
+          git commit -m "Refactor Android source and remove dead app code"
           git push
