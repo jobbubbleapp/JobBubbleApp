@@ -28,6 +28,7 @@ needles = [
     'sourceChip.setOnClickListener',
     'distanceValue.setOnClickListener',
     'makeJobBubble',
+    'makeJobPileBitmap(',
     'renderSingleJobMarker',
     'choiceIcon(',
     'showChoiceMenu(',
@@ -49,8 +50,12 @@ for needle in needles:
         continue
     print(f'\n--- {needle!r}: {len(hits)} hit(s) ---')
     for i in hits[:8]:
-        start = max(0, i - 18)
-        end = min(len(lines), i + 42)
+        if needle == 'makeJobPileBitmap(':
+            start = max(0, i - 5)
+            end = min(len(lines), i + 120)
+        else:
+            start = max(0, i - 18)
+            end = min(len(lines), i + 42)
         key = (start, end)
         if key in seen:
             continue
