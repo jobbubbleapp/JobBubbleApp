@@ -26,15 +26,15 @@ jobs:
           P=$(dirname "$G")
           python3 scripts/apply_current.py "$P"
           echo "P=$P" >> "$GITHUB_ENV"
-      - name: Inspect test dependencies and pure logic candidates
+      - name: Inspect exact testable production logic
         shell: bash
         run: |
           set -euo pipefail
           echo '--- app/build.gradle ---'
           cat "$P/app/build.gradle"
-          echo '--- existing tests ---'
-          find "$P/app/src/test" "$P/app/src/androidTest" -type f -maxdepth 10 -print 2>/dev/null || true
-          echo '--- candidate production methods ---'
-          grep -nE 'backendCategoryQuery|backendSourceParam|normalizeBackendWhere|class Job|salary_period|distance|haversine|parsePay|employment_type|location_precision' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java" | head -n 160 || true
-          echo '--- Java files ---'
-          find "$P/app/src/main/java" -type f -name '*.java' -print
+          echo '--- backend/category/source/where methods ---'
+          sed -n '1740,1895p' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo '--- distance helper ---'
+          sed -n '2458,2478p' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo '--- Job parser ---'
+          sed -n '3260,3285p' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
