@@ -35,6 +35,7 @@ steps = [
     'v967_options_legal_links.py',
     'v968_legal_links_help_only.py',
     'v969_filter_loading.py',
+    'v970_filter_reload_fix.py',
 ]
 
 for script in steps:
