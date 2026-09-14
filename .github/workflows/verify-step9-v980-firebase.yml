@@ -4,9 +4,7 @@ on:
   push:
     branches: [feature/step9-cleanup-testing]
     paths:
-      - 'scripts/v979_google_play_services.py'
       - 'scripts/v980_firebase_dependencies.py'
-      - 'scripts/apply_current.py'
       - '.github/workflows/verify-step9-v980-firebase.yml'
 
 permissions:
@@ -31,10 +29,10 @@ jobs:
           python3 scripts/apply_current.py "$P" | tee /tmp/v980-pipeline.txt
           echo "P=$P" >> "$GITHUB_ENV"
           test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.80'
-          grep -Fq 'firebase-auth:24.2.0' "$P/app/build.gradle"
+          grep -Fq 'firebase-auth:23.2.1' "$P/app/build.gradle"
+          if grep -Fq 'firebase-auth:24.2.0' "$P/app/build.gradle"; then echo 'Auth 24.2.0 must remain deferred'; exit 1; fi
           grep -Fq 'firebase-firestore:26.6.0' "$P/app/build.gradle"
-          ! grep -Fq 'firebase-auth:23.2.1' "$P/app/build.gradle"
-          ! grep -Fq 'firebase-firestore:25.1.4' "$P/app/build.gradle"
+          if grep -Fq 'firebase-firestore:25.1.4' "$P/app/build.gradle"; then echo 'Old Firestore still present'; exit 1; fi
           grep -Fq 'play-services-location:21.3.0' "$P/app/build.gradle"
           grep -Fq 'play-services-maps:20.0.0' "$P/app/build.gradle"
           grep -Fq 'play-services-auth:21.3.0' "$P/app/build.gradle"
@@ -47,19 +45,20 @@ jobs:
           set -euo pipefail
           chmod +x gradlew
           ./gradlew --no-daemon --max-workers=2 app:dependencies --configuration debugRuntimeClasspath > /tmp/v980-dependencies.txt
-          grep -Fq 'com.google.firebase:firebase-auth:24.2.0' /tmp/v980-dependencies.txt
+          grep -Fq 'com.google.firebase:firebase-auth:23.2.1' /tmp/v980-dependencies.txt
           grep -Fq 'com.google.firebase:firebase-firestore:26.6.0' /tmp/v980-dependencies.txt
           ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug 2>&1 | tee /tmp/v980-gradle.txt
           R=$(find app/build -name lint-results-debug.txt -print -quit); cp "$R" /tmp/v980-lint.txt
-          ! grep -q ' Error:' /tmp/v980-lint.txt
-          ! grep -q 'incompatible version of Kotlin' /tmp/v980-gradle.txt
+          if grep -q ' Error:' /tmp/v980-lint.txt; then echo 'Lint error detected'; exit 1; fi
+          if grep -q 'incompatible version of Kotlin' /tmp/v980-gradle.txt; then echo 'Kotlin metadata incompatibility detected'; exit 1; fi
+          if grep -q 'Unexpected error during rewriting of Kotlin metadata' /tmp/v980-gradle.txt; then echo 'R8 Kotlin metadata rewrite failure detected'; exit 1; fi
           python3 - <<'PY'
           import glob,xml.etree.ElementTree as ET
           t=f=e=0
           for p in glob.glob('app/build/test-results/testDebugUnitTest/*.xml'):
               r=ET.parse(p).getroot(); t+=int(r.attrib.get('tests',0)); f+=int(r.attrib.get('failures',0)); e+=int(r.attrib.get('errors',0))
           assert t>=4 and f==0 and e==0,(t,f,e)
-          print(f'PASS: Firebase Auth/Firestore upgrade resolves and builds; {t} Android unit tests pass')
+          print(f'PASS: Firestore 26.6.0 builds cleanly with Firebase Auth 23.2.1 preserved; {t} Android unit tests pass')
           PY
       - uses: actions/upload-artifact@v4
         with:
