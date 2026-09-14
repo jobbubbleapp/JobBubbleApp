@@ -1,0 +1,37 @@
+name: Inspect JobBubble Step 4 Clusters
+
+on:
+  push:
+    branches:
+      - feature/code-cleanup-v948
+    paths:
+      - '.github/workflows/inspect-step4-clusters.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize and inspect cluster code
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          {
+            echo '===== pile / cluster methods ====='
+            grep -n -E -A140 -B40 'class .*Pile|Pile\(|build.*Pile|pile|cluster|zoom|MarkerClick|setOnMarkerClickListener|render.*Marker|scheduleMapRender|markerFor' "$MAIN" | head -4000 || true
+          } | tee "$RUNNER_TEMP/step4-cluster-diagnostic.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step4-cluster-diagnostic
+          path: ${{ runner.temp }}/step4-cluster-diagnostic.txt
+          retention-days: 1
