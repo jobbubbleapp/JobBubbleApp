@@ -1,0 +1,81 @@
+name: Step 8 Capture Android Lint
+
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths:
+      - '.github/workflows/step8-capture-lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Materialize V9.4.72 and inject Maps key
+        id: project
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.72'
+          python3 - "$P" <<'PY'
+          import os,re,sys
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(sys.argv[1]); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' not in t: continue
+              pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+              t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+              if n: found+=1; m.write_text(t)
+          assert found
+          PY
+          chmod +x "$P/gradlew"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Run lint and capture complete text report
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        shell: bash
+        run: |
+          set +e
+          ./gradlew --no-daemon --max-workers=2 lintDebug > /tmp/step8-lint-console.txt 2>&1
+          status=$?
+          set -e
+          REPORT=$(find app/build -type f -name 'lint-results-debug.txt' -print -quit)
+          test -n "$REPORT"
+          cp "$REPORT" /tmp/step8-lint-results.txt
+          echo '===== ALL LINT ERRORS ====='
+          grep -n -B2 -A6 ' Error:' /tmp/step8-lint-results.txt || true
+          echo '===== ERROR/WARNING TOTAL ====='
+          tail -n 5 /tmp/step8-lint-results.txt || true
+          echo "lint_exit=$status"
+
+      - name: Upload full lint report
+        uses: actions/upload-artifact@v4
+        with:
+          name: step8-lint-report
+          path: |
+            /tmp/step8-lint-results.txt
+            /tmp/step8-lint-console.txt
+          retention-days: 3
