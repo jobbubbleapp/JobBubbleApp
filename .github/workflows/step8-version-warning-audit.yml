@@ -1,0 +1,89 @@
+name: Step 8 Version Metadata and Warning Audit
+
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths: ['.github/workflows/step8-version-warning-audit.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Materialize V9.4.73 and inspect Android package version
+        id: p
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" >/dev/null
+          echo "pipeline_version=$(tr -d '\r\n ' < "$P/VERSION.txt")"
+          echo '===== VERSION DECLARATIONS ====='
+          grep -RInE 'version(Code|Name)|VERSION' "$P" --exclude-dir=.gradle --exclude-dir=build | head -n 100 || true
+          echo "dir=$P" >> "$GITHUB_OUTPUT"
+      - name: Inject Maps key and run lint
+        env:
+          P: ${{ steps.p.outputs.dir }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re,pathlib
+          from xml.sax.saxutils import escape
+          root=pathlib.Path(os.environ['P']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          hit=0
+          for p in root.rglob('src/main/AndroidManifest.xml'):
+              s=p.read_text()
+              if 'com.google.android.geo.API_KEY' not in s: continue
+              pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+              s,n=pat.subn(r'\1'+key+r'\2',s,count=1)
+              if n: p.write_text(s); hit+=1
+          assert hit==1
+          PY
+          cd "$P"; chmod +x gradlew
+          ./gradlew --no-daemon --max-workers=2 lintDebug >/tmp/step8-warning-lint-console.txt
+          R=$(find app/build -name lint-results-debug.txt -print -quit); cp "$R" /tmp/step8-warning-lint.txt
+      - name: Summarize warning categories and enforce no high-risk warning classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import collections,re
+          s=open('/tmp/step8-warning-lint.txt',encoding='utf-8').read()
+          issues=re.findall(r'\[(.*?)\]\s*$',s,re.M)
+          counts=collections.Counter(issues)
+          print('===== LINT ISSUE COUNTS =====')
+          for k,v in counts.most_common(): print(f'{v:4d} {k}')
+          print('===== TOTALS =====')
+          m=re.search(r'(\d+) errors, (\d+) warnings',s)
+          print(m.group(0) if m else 'totals not found')
+          # Warnings in these categories can indicate a real runtime/security/package
+          # problem rather than style/accessibility cleanup; fail so they are reviewed.
+          high_risk={'WrongConstant','InlinedApi','NewApi','ExpiredTargetSdkVersion','OldTargetApi','UnsafeOptInUsageError','BlockedPrivateApi','MissingPermission','ExportedReceiver','ExportedService','ExportedActivity','Instantiatable','MissingClass','DuplicateIds','ResourceType','InvalidPackage','WrongViewCast','UseSparseArrays','ObsoleteSdkInt','UnsupportedChromeOsHardware'}
+          bad={k:v for k,v in counts.items() if k in high_risk}
+          if bad:
+              print('HIGH-RISK WARNING CATEGORIES:',bad)
+              raise SystemExit(1)
+          print('PASS: no selected high-risk Android lint warning categories remain')
+          PY
+          cp /tmp/step8-warning-lint.txt /tmp/step8-warning-lint-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: step8-version-warning-audit
+          path: |
+            /tmp/step8-warning-lint-report.txt
+            /tmp/step8-warning-lint-console.txt
+          if-no-files-found: ignore
+          retention-days: 3
