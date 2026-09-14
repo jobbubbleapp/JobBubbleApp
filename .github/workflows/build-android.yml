@@ -40,7 +40,7 @@ jobs:
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
 
-      - name: Apply patches and verify V9.4.67
+      - name: Apply patches and verify V9.4.68
         shell: bash
         run: |
           set -euo pipefail
@@ -48,7 +48,7 @@ jobs:
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           LAYOUT="$P/app/src/main/res/layout/activity_main.xml"
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.67'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.68'
 
           # Preserve the compact top filter UI exactly as requested.
           grep -Fq 'final int targetHeight=dp(30);' "$MAIN"
@@ -70,22 +70,20 @@ jobs:
           print('Compact top UI verified')
           PY
 
-          # Help & Support must expose the public privacy/support/deletion pages.
+          # Privacy Policy, Support, and Delete Account must live inside Help & Support only.
           grep -Fq 'private void showHelpSupport()' "$MAIN"
-          grep -Fq 'Delete Account & Data' "$MAIN"
+          grep -Fq 'settingsMenuButton("Privacy Policy",false)' "$MAIN"
+          grep -Fq 'settingsMenuButton("Support",false)' "$MAIN"
+          grep -Fq 'settingsMenuButton("Delete Account & Data",true)' "$MAIN"
           grep -Fq 'https://jobbubble-support.onrender.com/privacy.html' "$MAIN"
           grep -Fq 'https://jobbubble-support.onrender.com/support.html' "$MAIN"
           grep -Fq 'https://jobbubble-support.onrender.com/delete-account.html' "$MAIN"
+          ! grep -Fq 'privacyPolicyOption' "$MAIN"
+          ! grep -Fq 'supportOption' "$MAIN"
+          ! grep -Fq 'deleteAccountOption' "$MAIN"
+          ! grep -Fq 'settingsMenuButton("Delete Account",true)' "$MAIN"
 
-          # The main Options page must also expose the three publication-facing links directly.
-          grep -Fq 'settingsMenuButton("Privacy Policy",false)' "$MAIN"
-          grep -Fq 'settingsMenuButton("Support",false)' "$MAIN"
-          grep -Fq 'settingsMenuButton("Delete Account",true)' "$MAIN"
-          grep -Fq 'privacyPolicyOption.setOnClickListener' "$MAIN"
-          grep -Fq 'supportOption.setOnClickListener' "$MAIN"
-          grep -Fq 'deleteAccountOption.setOnClickListener' "$MAIN"
-
-          # Employer logos are disabled in rendering; JobBubble category vectors are the only job artwork.
+          # Employer logos remain disabled; JobBubble category vectors are the only job artwork.
           grep -Fq 'drawCategoryBubbleIcon(c,j,cx,cy);' "$MAIN"
           grep -Fq 'drawUnifiedCategoryIcon(c,bubbleIconFamily(j),cx,cy' "$MAIN"
           python3 - "$MAIN" <<'PY'
@@ -136,12 +134,12 @@ jobs:
           A=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           test -n "$A"
           mkdir -p "$RUNNER_TEMP/apks"
-          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.67.apk"
-          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.67.apk" >> "$GITHUB_OUTPUT"
+          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.68.apk"
+          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.68.apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.67
+          name: JobBubble-V9.4.68
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
