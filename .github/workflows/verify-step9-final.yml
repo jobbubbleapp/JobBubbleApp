@@ -1,0 +1,213 @@
+name: Verify Step 9 Final Matrix
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - 'scripts/v979_google_play_services.py'
+      - 'scripts/v980_firebase_dependencies.py'
+      - 'scripts/apply_current.py'
+      - '.github/workflows/verify-step9-final.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Free runner storage
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          docker system prune -af || true
+      - name: Materialize final V9.4.80 source
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); test -n "$G"; P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" | tee /tmp/step9-final-pipeline.txt
+          test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.80'
+          grep -Eq '^\s*targetSdk\s+35\s*$' "$P/app/build.gradle"
+          grep -Fq 'androidx.appcompat:appcompat:1.8.0' "$P/app/build.gradle"
+          grep -Fq 'com.google.android.material:material:1.14.0' "$P/app/build.gradle"
+          grep -Fq 'play-services-location:21.3.0' "$P/app/build.gradle"
+          grep -Fq 'play-services-maps:20.0.0' "$P/app/build.gradle"
+          grep -Fq 'play-services-auth:21.3.0' "$P/app/build.gradle"
+          grep -Fq 'firebase-auth:24.2.0' "$P/app/build.gradle"
+          grep -Fq 'firebase-firestore:26.6.0' "$P/app/build.gradle"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+      - name: Inject Maps API key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+                  if n: found+=1; m.write_text(t)
+          assert found, 'Maps API key metadata not found'
+          PY
+      - name: Final Android tests lint and APK build
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug 2>&1 | tee /tmp/step9-final-gradle.txt
+          R=$(find app/build -name lint-results-debug.txt -print -quit); cp "$R" /tmp/step9-final-lint.txt
+          ! grep -q ' Error:' /tmp/step9-final-lint.txt
+          ! grep -q 'incompatible version of Kotlin' /tmp/step9-final-gradle.txt
+          python3 - <<'PY'
+          import glob,xml.etree.ElementTree as ET
+          t=f=e=0
+          for p in glob.glob('app/build/test-results/testDebugUnitTest/*.xml'):
+              r=ET.parse(p).getroot(); t+=int(r.attrib.get('tests',0)); f+=int(r.attrib.get('failures',0)); e+=int(r.attrib.get('errors',0))
+          assert t>=4 and f==0 and e==0,(t,f,e)
+          print(f'PASS: final Android compile/lint gate and {t} unit tests')
+          PY
+          mkdir -p "$RUNNER_TEMP/final-apk"
+          APK=$(find app/build/outputs/apk/debug -name '*.apk' -print -quit); test -n "$APK"
+          cp "$APK" "$RUNNER_TEMP/final-apk/JobBubble-v9.4.80-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step9-v980-final-apk
+          path: ${{ runner.temp }}/final-apk/JobBubble-v9.4.80-debug.apk
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step9-v980-final-build-evidence
+          path: |
+            /tmp/step9-final-pipeline.txt
+            /tmp/step9-final-gradle.txt
+            /tmp/step9-final-lint.txt
+          retention-days: 3
+
+  emulator-smoke:
+    needs: build-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [23, 35]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner storage and enable KVM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          docker system prune -af || true
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: step9-v980-final-apk
+          path: ${{ runner.temp }}/apk
+      - name: Prepare runtime smoke test
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/step9-smoke.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          API="${STEP9_API}"
+          APK=$(find "$RUNNER_TEMP/apk" -name '*.apk' -print -quit); test -n "$APK"
+          dump_ui(){ local n="$1"; adb shell uiautomator dump --compressed "/sdcard/$n.xml" >/dev/null 2>&1 || true; adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" >/dev/null 2>&1 || true; }
+          tap_text(){
+            python3 - "$1" "$2" <<'PY'
+          import html,re,subprocess,sys
+          needle,path=sys.argv[1:]
+          try: data=open(path,encoding='utf-8').read()
+          except Exception: raise SystemExit(1)
+          for node in re.findall(r'<node[^>]*>',data):
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+          raise SystemExit(1)
+          PY
+          }
+          dismiss_overlays(){
+            dump_ui overlay
+            for t in 'Got it' 'OK' 'Allow'; do
+              if grep -qi "text=\"$t" "$RUNNER_TEMP/overlay.xml" 2>/dev/null; then tap_text "$t" "$RUNNER_TEMP/overlay.xml" || true; sleep 1; fi
+            done
+          }
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb emu geo fix -122.2021 47.9780 || true
+          adb install -r -g "$APK"
+          adb logcat -c
+          adb shell monkey -p com.jobbubble.app -c android.intent.category.LAUNCHER 1 >/dev/null
+          sleep 4
+          entered=0
+          for n in $(seq 1 20); do
+            dismiss_overlays
+            dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
+            if grep -q 'package="com.jobbubble.app"' "$f" && grep -qi 'text="List"' "$f"; then entered=1; break; fi
+            if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f" || true; sleep 3; continue; fi
+            if grep -qi 'text="[^"]*Guest' "$f"; then tap_text 'Guest' "$f" || true; sleep 3; continue; fi
+            sleep 2
+          done
+          test "$entered" = 1
+          sleep 8
+          dismiss_overlays; dump_ui final
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/final.xml"
+          grep -qi 'text="List"' "$RUNNER_TEMP/final.xml"
+          adb shell dumpsys activity activities > "$RUNNER_TEMP/api${API}-activity.txt" || true
+          adb logcat -d -v time > "$RUNNER_TEMP/api${API}-logcat.txt"
+          if grep -Eiq 'FATAL EXCEPTION|Process: com\.jobbubble\.app.*FATAL|NoClassDefFoundError|VerifyError|FirebaseApp initialization unsuccessful|Default FirebaseApp failed to initialize' "$RUNNER_TEMP/api${API}-logcat.txt"; then
+            echo "Runtime/Firebase failure detected on API $API"; exit 1
+          fi
+          adb exec-out screencap -p > "$RUNNER_TEMP/api${API}-final.png"
+          echo "PASS: JobBubble V9.4.80 startup/guest/map/Firebase smoke on API $API"
+          SH
+          chmod +x "$RUNNER_TEMP/step9-smoke.sh"
+      - name: Run API ${{ matrix.api }} emulator smoke test
+        uses: ReactiveCircus/android-emulator-runner@v2
+        env:
+          STEP9_API: ${{ matrix.api }}
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash "$RUNNER_TEMP/step9-smoke.sh"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: step9-v980-api${{ matrix.api }}-evidence
+          path: |
+            ${{ runner.temp }}/api${{ matrix.api }}-final.png
+            ${{ runner.temp }}/api${{ matrix.api }}-logcat.txt
+            ${{ runner.temp }}/api${{ matrix.api }}-activity.txt
+            ${{ runner.temp }}/final.xml
+          if-no-files-found: ignore
+          retention-days: 3
