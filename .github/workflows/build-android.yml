@@ -40,7 +40,7 @@ jobs:
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
 
-      - name: Apply patches and verify V9.4.68
+      - name: Apply patches and verify V9.4.69
         shell: bash
         run: |
           set -euo pipefail
@@ -48,7 +48,16 @@ jobs:
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           LAYOUT="$P/app/src/main/res/layout/activity_main.xml"
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.68'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.69'
+
+          # Every distance/category/source/pay change must enter the loading UI path.
+          grep -Fq 'private void applyFiltersWithLoading()' "$MAIN"
+          grep -Fq 'category=choice;categoryChip.setText(choice);saveLocalSettings();saveCloudState();applyFiltersWithLoading();' "$MAIN"
+          grep -Fq 'if(changed)loadJobs();else applyFiltersWithLoading();' "$MAIN"
+          grep -Fq 'onStopTrackingTouch(SeekBar s){saveLocalSettings();saveCloudState();applyFiltersWithLoading();}' "$MAIN"
+          grep -Fq 'refreshForRangeChange();' "$MAIN"
+          grep -Fq 'showJobsLoading();' "$MAIN"
+          ! grep -Fq 'if(!hadJobs)showJobsLoading();' "$MAIN"
 
           # Preserve the compact top filter UI exactly as requested.
           grep -Fq 'final int targetHeight=dp(30);' "$MAIN"
@@ -134,12 +143,12 @@ jobs:
           A=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           test -n "$A"
           mkdir -p "$RUNNER_TEMP/apks"
-          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.68.apk"
-          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.68.apk" >> "$GITHUB_OUTPUT"
+          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.69.apk"
+          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.69.apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.68
+          name: JobBubble-V9.4.69
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
