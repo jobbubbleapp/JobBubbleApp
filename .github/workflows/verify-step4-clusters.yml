@@ -83,11 +83,8 @@ jobs:
               if z < 18.8: return 28
               if z < 19.7: return 20
               return 14
-          for z in (11,12,14,15,16,17,18,19,20):
-              assert new(z) <= old(z), (z,old(z),new(z))
-          # 80dp-apart jobs stayed piled at zoom 15.0 before; now they separate.
+          for z in (11,12,14,15,16,17,18,19,20): assert new(z) <= old(z)
           assert 80 <= old(15.0) and 80 > new(15.0)
-          # 58dp-apart jobs stayed piled at zoom 16.5 before; now they separate.
           assert 58 <= old(16.5) and 58 > new(16.5)
           print('PASS: cluster thresholds separate representative nearby jobs sooner')
           PY
@@ -140,8 +137,13 @@ jobs:
           raise SystemExit('missing text '+needle)
           PY
           }
+          dismiss_overlays(){
+            dump_ui system-overlay
+            if grep -q 'Got it' "$RUNNER_TEMP/system-overlay.xml" 2>/dev/null; then tap_text 'Got it' "$RUNNER_TEMP/system-overlay.xml"; sleep 1; fi
+          }
           enter_guest(){
-            for n in $(seq 1 15); do
+            for n in $(seq 1 18); do
+              dismiss_overlays
               dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
               if grep -q 'text="List"' "$f"; then return 0; fi
               if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f"; sleep 3; continue; fi
@@ -152,6 +154,7 @@ jobs:
           }
           wait_map(){
             for n in $(seq 1 50); do
+              dismiss_overlays
               dump_ui "map-$n"; f="$RUNNER_TEMP/map-$n.xml"
               if grep -q 'package="com.jobbubble.app"' "$f" && grep -q 'text="List"' "$f" && ! grep -q 'Loading your jobs list' "$f"; then cp "$f" "$RUNNER_TEMP/final-map.xml"; return 0; fi
               sleep 2
@@ -170,10 +173,8 @@ jobs:
           adb logcat -c
           adb shell am start -W -n "$PKG/$ACT" >/dev/null
           sleep 3; enter_guest; wait_map
-          # Exercise repeated camera-idle rebuilds across higher zoom levels. Double taps
-          # on the map zoom in and force the cluster code to rebuild without modifying data.
           for i in 1 2 3 4; do adb shell input tap 540 1100; adb shell input tap 540 1100; sleep 2; done
-          dump_ui after-zoom
+          dismiss_overlays; dump_ui after-zoom
           grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/after-zoom.xml"
           adb logcat -d -v brief > "$RUNNER_TEMP/step4-logcat.txt"
           if grep -E 'FATAL EXCEPTION.*com\.jobbubble\.app|Process: com\.jobbubble\.app.*FATAL' "$RUNNER_TEMP/step4-logcat.txt"; then
