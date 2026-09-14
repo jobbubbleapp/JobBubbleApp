@@ -1,4 +1,4 @@
-name: Inspect JobBubble Step 3 Request Lifecycle
+name: Inspect JobBubble Step 3 Filter Interactions
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect current generated request lifecycle
+      - name: Inspect current generated filter lifecycle
         shell: bash
         run: |
           set -euo pipefail
@@ -26,7 +26,15 @@ jobs:
           P=$(dirname "$GRADLEW")
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
-          echo '===== loadJobs ====='
-          grep -n -A180 -B20 'void loadJobs' "$MAIN" || true
-          echo '===== job request / async fields ====='
-          grep -n -E -A12 -B12 'loadJobs|request|HttpURLConnection|Executor|runOnUiThread|jobs\.clear|jobs\.add|allJobs|displayedJobs|fetchJobs' "$MAIN" | head -1200 || true
+
+          echo '===== filter and refresh methods ====='
+          grep -n -E -A120 -B20 'void applyFilters\(|void refreshForRangeChange\(|String backendCategoryQuery\(|String backendSourceParam\(|String buildJobRequestUrl\(' "$MAIN" | head -1800 || true
+
+          echo '===== filter controls/callbacks ====='
+          grep -n -E -A50 -B20 'activeCategory|maxDistanceMiles|minPay|selectedSource|show.*Filter|show.*Sheet|onStopTrackingTouch|All jobs|All sources' "$MAIN" | head -2200 || true
+
+          echo '===== pay parsing/matching ====='
+          grep -n -E -A35 -B20 'pay|salary|hourly|minPay|maxPay|extract.*Pay|parse.*Pay|matches.*Pay' "$MAIN" | head -1800 || true
+
+          echo '===== cache/refined result paths ====='
+          grep -n -E -A45 -B20 'jobsCache|persistJobsCache|load.*Cache|requestRefinedJobs|refinement_pending|jobs\.clear|jobs\.addAll' "$MAIN" | head -1800 || true
