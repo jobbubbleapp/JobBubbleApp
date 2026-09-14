@@ -26,7 +26,13 @@ jobs:
           P=$(dirname "$GRADLEW")
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
-          echo '===== loading methods ====='
-          grep -n -E 'loading|Loading|show.*Load|hide.*Load' "$MAIN" | head -120 || true
-          echo '===== filter/listener wiring ====='
-          grep -n -E 'distanceValue|payValue|categoryChip|sourceChip|setOnClickListener|setOnSeekBarChangeListener|loadJobs\(' "$MAIN" | head -260 || true
+          echo '===== filter setup ====='
+          sed -n '1138,1170p' "$MAIN"
+          echo '===== choice menu ====='
+          sed -n '1450,1510p' "$MAIN"
+          echo '===== numeric filter ====='
+          sed -n '1540,1580p' "$MAIN"
+          echo '===== filter settings ====='
+          sed -n '1590,1630p' "$MAIN"
+          echo '===== loading + loadJobs ====='
+          sed -n '1615,1750p' "$MAIN"
