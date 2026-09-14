@@ -1,0 +1,66 @@
+name: Verify Step 9 V9.4.79 Google Play
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - 'scripts/v979_google_play_services.py'
+      - 'scripts/apply_current.py'
+      - '.github/workflows/verify-step9-v979-google-play.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Materialize V9.4.79
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); test -n "$G"; P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" | tee /tmp/v979-pipeline.txt
+          echo "P=$P" >> "$GITHUB_ENV"
+          test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.79'
+          grep -Fq 'play-services-location:21.4.0' "$P/app/build.gradle"
+          grep -Fq 'play-services-maps:20.0.0' "$P/app/build.gradle"
+          grep -Fq 'play-services-auth:21.3.0' "$P/app/build.gradle"
+          ! grep -Fq 'play-services-auth:22.' "$P/app/build.gradle"
+          grep -Fq '<uses-library android:name="org.apache.http.legacy" android:required="false" />' "$P/app/src/main/AndroidManifest.xml"
+          grep -Eq '^\s*targetSdk\s+35\s*$' "$P/app/build.gradle"
+          grep -Eq '^\s*versionCode\s+86\s*$' "$P/app/build.gradle"
+      - name: Resolve dependencies tests lint and APK build
+        shell: bash
+        working-directory: ${{ env.P }}
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --max-workers=2 app:dependencies --configuration debugRuntimeClasspath > /tmp/v979-dependencies.txt
+          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug | tee /tmp/v979-gradle.txt
+          R=$(find app/build -name lint-results-debug.txt -print -quit); cp "$R" /tmp/v979-lint.txt
+          ! grep -q ' Error:' /tmp/v979-lint.txt
+          python3 - <<'PY'
+          import glob,xml.etree.ElementTree as ET
+          t=f=e=0
+          for p in glob.glob('app/build/test-results/testDebugUnitTest/*.xml'):
+              r=ET.parse(p).getroot(); t+=int(r.attrib.get('tests',0)); f+=int(r.attrib.get('failures',0)); e+=int(r.attrib.get('errors',0))
+          assert t>=4 and f==0 and e==0,(t,f,e)
+          print(f'PASS: Maps/location upgrade builds with legacy Google Sign-In preserved; {t} unit tests pass')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step9-v979-google-play-evidence
+          path: |
+            /tmp/v979-pipeline.txt
+            /tmp/v979-dependencies.txt
+            /tmp/v979-gradle.txt
+            /tmp/v979-lint.txt
+          retention-days: 3
