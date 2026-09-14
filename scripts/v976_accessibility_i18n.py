@@ -69,12 +69,12 @@ for layout in sorted((res / 'layout').glob('*.xml')):
     text = re.sub(r'android:gravity="left([|\"]?)', lambda m: 'android:gravity="start' + m.group(1), text)
     text = re.sub(r'android:gravity="right([|\"]?)', lambda m: 'android:gravity="end' + m.group(1), text)
 
-    # The main toolbar logo had one-sided 5dp padding. Add the matching relative end
-    # padding to remove the RTL-symmetry defect with only a 5dp visual adjustment.
+    # The main toolbar logo had one-sided 5dp padding on a multiline ImageView tag.
+    # Match across line breaks and add the corresponding relative end padding.
     if layout.name == 'activity_main.xml':
         text = re.sub(
-            r'(<[^>\n]*android:paddingStart="5dp")(?![^>\n]*android:paddingEnd=)',
-            r'\1 android:paddingEnd="5dp"', text, count=1)
+            r'(<[^>]*android:paddingStart="5dp")(?![^>]*android:paddingEnd=)',
+            r'\1 android:paddingEnd="5dp"', text, count=1, flags=re.S)
     layout.write_text(text, encoding='utf-8')
 
 s = main.read_text(encoding='utf-8')
