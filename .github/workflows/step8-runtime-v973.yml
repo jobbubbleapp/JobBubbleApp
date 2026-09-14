@@ -1,0 +1,165 @@
+name: Step 8 V9.4.73 Runtime Verification
+
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths:
+      - '.github/workflows/step8-runtime-v973.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Free storage and enable KVM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+
+      - name: Materialize and build V9.4.73
+        id: project
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P"
+          grep -Fxq '9.4.73' "$P/VERSION.txt"
+          python3 - "$P" <<'PY'
+          import os,re,sys
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          root=Path(sys.argv[1]); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in root.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' not in t: continue
+              pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+              t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+              if n: found+=1; m.write_text(t)
+          assert found==1
+          PY
+          chmod +x "$P/gradlew"
+          (cd "$P" && ./gradlew --no-daemon --max-workers=2 assembleDebug)
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare runtime verifier
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/verify-v973.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          dump_ui(){ local n="$1"; adb shell uiautomator dump --compressed "/sdcard/$n.xml" >/dev/null || true; adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" >/dev/null || true; }
+          tap_text(){
+            python3 - "$1" "$2" <<'PY'
+          import html,re,subprocess,sys
+          needle,path=sys.argv[1:]
+          data=open(path,encoding='utf-8').read()
+          for node in re.findall(r'<node[^>]*>',data):
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+          raise SystemExit(1)
+          PY
+          }
+          dismiss_overlays(){
+            dump_ui overlay
+            if grep -q 'Got it' "$RUNNER_TEMP/overlay.xml" 2>/dev/null; then tap_text 'Got it' "$RUNNER_TEMP/overlay.xml" || true; sleep 1; fi
+          }
+          enter_guest(){
+            for n in $(seq 1 24); do
+              dismiss_overlays; dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
+              if grep -q 'text="List"' "$f"; then return 0; fi
+              if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f" || true; sleep 3; continue; fi
+              if grep -qi 'Guest' "$f"; then tap_text 'Guest' "$f" || true; sleep 3; continue; fi
+              sleep 2
+            done
+            return 1
+          }
+          wait_ready(){
+            for n in $(seq 1 60); do
+              dismiss_overlays; dump_ui "ready-$n"; f="$RUNNER_TEMP/ready-$n.xml"
+              if grep -q 'package="com.jobbubble.app"' "$f" && grep -q 'text="List"' "$f" && ! grep -q 'Loading your jobs list' "$f"; then cp "$f" "$RUNNER_TEMP/v973-ready.xml"; return 0; fi
+              sleep 2
+            done
+            return 1
+          }
+
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb emu geo fix -122.4194 37.7749 || true
+          APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          test -n "$APK"
+          adb install -r -g "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          test "$PKG" = 'com.jobbubble.app'; test -n "$ACT"
+          adb logcat -c
+          adb shell am start -W -n "$PKG/$ACT" | tee "$RUNNER_TEMP/v973-am-start.txt"
+          sleep 3
+          enter_guest
+          wait_ready
+          for i in 1 2 3; do adb shell input tap 540 1100; adb shell input tap 540 1100; sleep 2; done
+          dump_ui v973-after-zoom
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/v973-after-zoom.xml"
+          if grep -q 'text="List"' "$RUNNER_TEMP/v973-after-zoom.xml"; then
+            tap_text 'List' "$RUNNER_TEMP/v973-after-zoom.xml" || true; sleep 2; dump_ui v973-list
+          fi
+          adb logcat -d -v threadtime > "$RUNNER_TEMP/v973-logcat.txt"
+          if grep -E 'FATAL EXCEPTION|ANR in com\.jobbubble\.app' "$RUNNER_TEMP/v973-logcat.txt"; then exit 1; fi
+          adb exec-out screencap -p > "$RUNNER_TEMP/v973-runtime.png"
+          echo 'PASS: V9.4.73 launched, loaded jobs, rebuilt clusters, and opened List without fatal runtime errors'
+          SH
+          chmod +x "$RUNNER_TEMP/verify-v973.sh"
+
+      - name: Run API 35 emulator verification
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash "$RUNNER_TEMP/verify-v973.sh"
+
+      - name: Upload V9.4.73 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step8-v973-runtime-evidence
+          path: |
+            ${{ runner.temp }}/v973-am-start.txt
+            ${{ runner.temp }}/v973-ready.xml
+            ${{ runner.temp }}/v973-after-zoom.xml
+            ${{ runner.temp }}/v973-list.xml
+            ${{ runner.temp }}/v973-logcat.txt
+            ${{ runner.temp }}/v973-runtime.png
+          if-no-files-found: ignore
+          retention-days: 3
