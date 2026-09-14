@@ -21,12 +21,12 @@ required = {
     'android:enforceStatusBarContrast': 'false',
 }
 
-# Remove API-specific framework attributes from the API-23 base resource. They are
-# restored below in version-qualified copies, preserving the same behavior on
-# supported Android releases without exposing older releases to unsupported attrs.
+# Remove API-specific framework attributes from the API-23 base resource. Use only
+# horizontal whitespace here: \s would also consume newlines/indentation belonging
+# to the following XML tag.
 for name, value in required.items():
     pattern = re.compile(
-        rf'^\s*<item\s+name=["\']{re.escape(name)}["\']>{re.escape(value)}</item>\s*\n?',
+        rf'^[ \t]*<item[ \t]+name=["\']{re.escape(name)}["\']>{re.escape(value)}</item>[ \t]*(?:\r?\n)?',
         re.MULTILINE,
     )
     base, count = pattern.subn('', base, count=1)
@@ -36,16 +36,15 @@ for name, value in required.items():
 if '<style name="AppTheme"' not in base or '</style>' not in base:
     raise SystemExit('AppTheme style not found after API-specific cleanup')
 
-# Keep the base style valid for minSdk 23.
 base_path.write_text(base, encoding='utf-8')
 
 
 def with_items(source: str, items: list[tuple[str, str]]) -> str:
     lines = ''.join(f'        <item name="{name}">{value}</item>\n' for name, value in items)
-    marker = '    </style>'
-    if source.count(marker) < 1:
+    match = re.search(r'(?m)^[ \t]*</style>[ \t]*$', source)
+    if not match:
         raise SystemExit('could not locate AppTheme closing tag')
-    return source.replace(marker, lines + marker, 1)
+    return source[:match.start()] + lines + source[match.start():]
 
 # API 27 gained light navigation bar control.
 v27 = with_items(base, [
@@ -66,8 +65,6 @@ for qualifier, text in [('values-v27', v27), ('values-v29', v29)]:
     target = directory / 'styles.xml'
     if target.exists():
         existing = target.read_text(encoding='utf-8')
-        # No version-qualified styles existed in the current source. Refuse to
-        # overwrite future resources silently if that changes later.
         if existing != text:
             raise SystemExit(f'refusing to overwrite unexpected existing resource: {target}')
     target.write_text(text, encoding='utf-8')
