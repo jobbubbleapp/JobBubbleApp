@@ -26,5 +26,8 @@ jobs:
           P=$(dirname "$GRADLEW")
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
-          echo '===== range refresh ====='
-          sed -n '1500,1545p' "$MAIN"
+          echo '===== request/filter methods ====='
+          grep -n -A45 -B5 'private String buildJobRequestUrl' "$MAIN" || true
+          grep -n -A30 -B5 'private String backendSourceParam' "$MAIN" || true
+          grep -n -A70 -B5 'private void applyFilters' "$MAIN" || true
+          grep -n -A35 -B5 'private void refreshForRangeChange' "$MAIN" || true
