@@ -40,7 +40,7 @@ jobs:
           test -n "$GRADLEW"
           echo "project_dir=$(dirname "$GRADLEW")" >> "$GITHUB_OUTPUT"
 
-      - name: Apply patches and verify V9.4.69
+      - name: Apply patches and verify V9.4.70
         shell: bash
         run: |
           set -euo pipefail
@@ -48,14 +48,20 @@ jobs:
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
           LAYOUT="$P/app/src/main/res/layout/activity_main.xml"
-          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.69'
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n')" = '9.4.70'
 
-          # Every distance/category/source/pay change must enter the loading UI path.
-          grep -Fq 'private void applyFiltersWithLoading()' "$MAIN"
-          grep -Fq 'category=choice;categoryChip.setText(choice);saveLocalSettings();saveCloudState();applyFiltersWithLoading();' "$MAIN"
+          # Filter changes must refresh the correct backend/local result set.
+          grep -Fq 'private String backendCategoryQuery()' "$MAIN"
+          grep -Fq 'String categoryQuery=backendCategoryQuery();' "$MAIN"
+          grep -Fq 'url.append("&what=")' "$MAIN"
+          grep -Fq 'boolean changed=!choice.equals(category);category=choice' "$MAIN"
           grep -Fq 'if(changed)loadJobs();else applyFiltersWithLoading();' "$MAIN"
-          grep -Fq 'onStopTrackingTouch(SeekBar s){saveLocalSettings();saveCloudState();applyFiltersWithLoading();}' "$MAIN"
-          grep -Fq 'refreshForRangeChange();' "$MAIN"
+          grep -Fq 'onStopTrackingTouch(SeekBar s){saveLocalSettings();saveCloudState();refreshForRangeChange();}' "$MAIN"
+          grep -Fq 'private void refreshForRangeChange()' "$MAIN"
+          grep -Fq 'loadJobs();' "$MAIN"
+
+          # Loading UI from V9.4.69 must remain active for refreshes.
+          grep -Fq 'private void applyFiltersWithLoading()' "$MAIN"
           grep -Fq 'showJobsLoading();' "$MAIN"
           ! grep -Fq 'if(!hadJobs)showJobsLoading();' "$MAIN"
 
@@ -143,12 +149,12 @@ jobs:
           A=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
           test -n "$A"
           mkdir -p "$RUNNER_TEMP/apks"
-          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.69.apk"
-          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.69.apk" >> "$GITHUB_OUTPUT"
+          cp "$A" "$RUNNER_TEMP/apks/JobBubble-V9.4.70.apk"
+          echo "path=$RUNNER_TEMP/apks/JobBubble-V9.4.70.apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: JobBubble-V9.4.69
+          name: JobBubble-V9.4.70
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
