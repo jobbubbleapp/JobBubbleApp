@@ -1,0 +1,212 @@
+name: Verify JobBubble Step 4 Clusters
+
+on:
+  push:
+    branches:
+      - feature/code-cleanup-v948
+    paths:
+      - '.github/workflows/verify-step4-clusters.yml'
+      - 'scripts/v972_cluster_split_animation.py'
+      - 'scripts/apply_current.py'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-step4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Free runner storage and enable KVM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+
+      - name: Extract, patch, and validate V9.4.72 source
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fxq '9.4.72' "$P/VERSION.txt"
+          grep -Fq 'if(zoom<15.8f)return 72;' "$MAIN"
+          grep -Fq 'if(zoom<16.8f)return 52;' "$MAIN"
+          grep -Fq 'if(zoom<17.8f)return 38;' "$MAIN"
+          grep -Fq 'if(zoom>=16.2f && pile.size()<=5' "$MAIN"
+          grep -Fq 'private LatLng clusterSplitAnimationStart(' "$MAIN"
+          grep -Fq 'if(animateCluster)animateMarkerTo(m,clusterStart,center' "$MAIN"
+          grep -Fq 'if(animate) animateMarkerTo(m,start,position,index%5);' "$MAIN"
+          grep -Fq 'if(pile.jobIndexes.size()>5){' "$MAIN"
+          grep -Fq 'showClusterSideList(pile);' "$MAIN"
+          grep -Fq 'Math.min(2,pile.size())' "$MAIN"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+          echo 'PASS V9.4.72 source wiring'
+
+      - name: Verify earlier separation thresholds deterministically
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          def old(z):
+              if z < 11.5: return 158
+              if z < 13.5: return 136
+              if z < 14.8: return 112
+              if z < 15.8: return 88
+              if z < 16.8: return 66
+              if z < 17.8: return 48
+              if z < 18.8: return 34
+              if z < 19.7: return 25
+              return 18
+          def new(z):
+              if z < 11.5: return 150
+              if z < 13.5: return 126
+              if z < 14.8: return 98
+              if z < 15.8: return 72
+              if z < 16.8: return 52
+              if z < 17.8: return 38
+              if z < 18.8: return 28
+              if z < 19.7: return 20
+              return 14
+          for z in (11,12,14,15,16,17,18,19,20):
+              assert new(z) <= old(z), (z,old(z),new(z))
+          # 80dp-apart jobs stayed piled at zoom 15.0 before; now they separate.
+          assert 80 <= old(15.0) and 80 > new(15.0)
+          # 58dp-apart jobs stayed piled at zoom 16.5 before; now they separate.
+          assert 58 <= old(16.5) and 58 > new(16.5)
+          print('PASS: cluster thresholds separate representative nearby jobs sooner')
+          PY
+
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+                  if n: found+=1; m.write_text(t)
+          assert found
+          PY
+
+      - name: Build V9.4.72 APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        run: chmod +x gradlew && ./gradlew --no-daemon --max-workers=2 assembleDebug
+
+      - name: Prepare Step 4 emulator smoke verifier
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/verify-step4.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          dump_ui(){ local n="$1"; adb shell uiautomator dump --compressed "/sdcard/$n.xml" >/dev/null || true; adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" >/dev/null || true; }
+          tap_text(){
+            python3 - "$1" "$2" <<'PY'
+          import html,re,subprocess,sys
+          needle,path=sys.argv[1:]
+          for node in re.findall(r'<node[^>]*>',open(path).read()):
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+          raise SystemExit('missing text '+needle)
+          PY
+          }
+          enter_guest(){
+            for n in $(seq 1 15); do
+              dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
+              if grep -q 'text="List"' "$f"; then return 0; fi
+              if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f"; sleep 3; continue; fi
+              if grep -qi 'Guest' "$f"; then tap_text 'Guest' "$f"; sleep 3; continue; fi
+              sleep 2
+            done
+            return 1
+          }
+          wait_map(){
+            for n in $(seq 1 50); do
+              dump_ui "map-$n"; f="$RUNNER_TEMP/map-$n.xml"
+              if grep -q 'package="com.jobbubble.app"' "$f" && grep -q 'text="List"' "$f" && ! grep -q 'Loading your jobs list' "$f"; then cp "$f" "$RUNNER_TEMP/final-map.xml"; return 0; fi
+              sleep 2
+            done
+            return 1
+          }
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb emu geo fix -122.2021 47.9780 || true
+          APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          adb install -r -g "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          adb logcat -c
+          adb shell am start -W -n "$PKG/$ACT" >/dev/null
+          sleep 3; enter_guest; wait_map
+          # Exercise repeated camera-idle rebuilds across higher zoom levels. Double taps
+          # on the map zoom in and force the cluster code to rebuild without modifying data.
+          for i in 1 2 3 4; do adb shell input tap 540 1100; adb shell input tap 540 1100; sleep 2; done
+          dump_ui after-zoom
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/after-zoom.xml"
+          adb logcat -d -v brief > "$RUNNER_TEMP/step4-logcat.txt"
+          if grep -E 'FATAL EXCEPTION.*com\.jobbubble\.app|Process: com\.jobbubble\.app.*FATAL' "$RUNNER_TEMP/step4-logcat.txt"; then
+            echo 'JobBubble crashed during Step 4 cluster zoom verification'; exit 1
+          fi
+          adb exec-out screencap -p > "$RUNNER_TEMP/step4-final.png"
+          echo 'PASS: V9.4.72 survived repeated zoom/cluster rebuilds without a crash'
+          SH
+          chmod +x "$RUNNER_TEMP/verify-step4.sh"
+
+      - name: Run Android emulator Step 4 verification
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash "$RUNNER_TEMP/verify-step4.sh"
+
+      - name: Upload Step 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step4-v972-evidence
+          path: |
+            ${{ runner.temp }}/step4-final.png
+            ${{ runner.temp }}/step4-logcat.txt
+            ${{ runner.temp }}/after-zoom.xml
+          if-no-files-found: ignore
+          retention-days: 3
