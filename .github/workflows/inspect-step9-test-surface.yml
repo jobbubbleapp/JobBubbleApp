@@ -1,0 +1,40 @@
+name: Inspect Step 9 Test Surface
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - '.github/workflows/inspect-step9-test-surface.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize current Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          test -n "$G"
+          P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P"
+          echo "P=$P" >> "$GITHUB_ENV"
+      - name: Inspect test dependencies and pure logic candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '--- app/build.gradle ---'
+          cat "$P/app/build.gradle"
+          echo '--- existing tests ---'
+          find "$P/app/src/test" "$P/app/src/androidTest" -type f -maxdepth 10 -print 2>/dev/null || true
+          echo '--- candidate production methods ---'
+          grep -nE 'backendCategoryQuery|backendSourceParam|normalizeBackendWhere|class Job|salary_period|distance|haversine|parsePay|employment_type|location_precision' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java" | head -n 160 || true
+          echo '--- Java files ---'
+          find "$P/app/src/main/java" -type f -name '*.java' -print
