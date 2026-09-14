@@ -1,0 +1,327 @@
+name: Verify JobBubble Step 2 Filters
+
+on:
+  push:
+    branches:
+      - feature/code-cleanup-v948
+    paths:
+      - '.github/workflows/verify-step2-filters.yml'
+      - 'scripts/**'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-step2-filters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Free runner storage
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+
+      - name: Verify production Step 2 backend filters
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,time,urllib.parse,urllib.request
+
+          BASE='https://jobbubble-backend-1.onrender.com/jobs'
+          common={
+              'where':'Everett, WA',
+              'lat':'47.9780',
+              'lon':'-122.2021',
+              'radius':'250',
+              'what':'warehouse',
+              'refresh':'1',
+          }
+
+          def fetch(source):
+              params=dict(common,source=source)
+              url=BASE+'?'+urllib.parse.urlencode(params)
+              last=None
+              for attempt in range(5):
+                  try:
+                      req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Step2-Verification/9.4.70'})
+                      with urllib.request.urlopen(req,timeout=90) as response:
+                          data=json.load(response)
+                      if int(float(data.get('radius_miles',0))) != 250:
+                          raise AssertionError(f'{source}: radius was {data.get("radius_miles")}, expected 250')
+                      if data.get('source_filter') != source:
+                          raise AssertionError(f'{source}: source_filter was {data.get("source_filter")}')
+                      jobs=data.get('jobs') or []
+                      if source == 'adzuna' and any(str(j.get('source','')).lower() != 'adzuna' for j in jobs):
+                          raise AssertionError('Adzuna source filter leaked another provider')
+                      if source == 'usajobs' and any(str(j.get('source','')).lower() != 'usajobs' for j in jobs):
+                          raise AssertionError('USAJOBS source filter leaked another provider')
+                      if source == 'ats' and any(not str(j.get('source','')).lower().startswith('ats/') for j in jobs):
+                          raise AssertionError('ATS source filter leaked another provider')
+                      print(f'PASS production source={source} radius=250 jobs={len(jobs)}')
+                      return
+                  except Exception as exc:
+                      last=exc
+                      print(f'{source} attempt {attempt+1} failed: {exc}')
+                      if attempt < 4: time.sleep(8)
+              raise last
+
+          for source in ('ats','adzuna','usajobs'):
+              fetch(source)
+          PY
+
+      - name: Extract and patch project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          grep -Fq 'if(changed)loadJobs();else applyFiltersWithLoading();' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fq 'refreshForRangeChange();' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fq 'String categoryQuery=backendCategoryQuery();' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fq 'url.append("&what=")' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fq 'showJobsLoading();' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1); assert n
+                  m.write_text(t)
+          PY
+
+      - name: Build Step 2 debug APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        run: chmod +x gradlew && ./gradlew --no-daemon --max-workers=2 assembleDebug
+
+      - name: Prepare Step 2 UI verification
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/verify-step2.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          dump_ui() {
+            local name="$1"
+            adb shell uiautomator dump --compressed "/sdcard/$name.xml" >/dev/null || true
+            adb pull "/sdcard/$name.xml" "$RUNNER_TEMP/$name.xml" >/dev/null || true
+          }
+
+          tap_text() {
+            local text="$1" file="$2"
+            python3 - "$text" "$file" <<'PY'
+          import re,sys,subprocess,html
+          needle,path=sys.argv[1:]
+          s=open(path).read()
+          for node in re.findall(r'<node[^>]*>',s):
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+                  raise SystemExit(0)
+          raise SystemExit('missing text '+needle)
+          PY
+          }
+
+          set_text_by_desc() {
+            local desc="$1" value="$2" file="$3"
+            python3 - "$desc" "$value" "$file" <<'PY'
+          import re,sys,subprocess,html
+          desc,value,path=sys.argv[1:]
+          s=open(path).read()
+          for node in re.findall(r'<node[^>]*>',s):
+              md=re.search(r'content-desc="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if md and mb and html.unescape(md.group(1)).casefold() == desc.casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+                  subprocess.run(['adb','shell','input','keyevent','KEYCODE_MOVE_END'],check=True)
+                  for _ in range(8): subprocess.run(['adb','shell','input','keyevent','KEYCODE_DEL'],check=True)
+                  subprocess.run(['adb','shell','input','text',value],check=True)
+                  subprocess.run(['adb','shell','input','keyevent','KEYCODE_BACK'],check=True)
+                  raise SystemExit(0)
+          raise SystemExit('missing content-desc '+desc)
+          PY
+          }
+
+          set_seekbar_percent() {
+            local file="$1" percent="$2"
+            python3 - "$file" "$percent" <<'PY'
+          import re,sys,subprocess
+          path,pct=sys.argv[1],float(sys.argv[2])
+          s=open(path).read()
+          nodes=[n for n in re.findall(r'<node[^>]*>',s) if 'class="android.widget.SeekBar"' in n]
+          if not nodes: raise SystemExit('no SeekBar found')
+          m=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',nodes[0])
+          if not m: raise SystemExit('SeekBar has no bounds')
+          x1,y1,x2,y2=map(int,m.groups()); x=round(x1+(x2-x1)*pct/100); y=(y1+y2)//2
+          subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+          PY
+          }
+
+          dismiss_system_overlays() {
+            for n in 1 2 3 4; do
+              dump_ui "overlay-$n"; f="$RUNNER_TEMP/overlay-$n.xml"
+              if grep -q 'Got it' "$f" 2>/dev/null; then tap_text 'Got it' "$f"; sleep 1; continue; fi
+              if grep -q "isn't responding" "$f" 2>/dev/null; then tap_text 'Wait' "$f" || tap_text 'Close app' "$f" || true; sleep 1; continue; fi
+              break
+            done
+          }
+
+          reach_main() {
+            for n in $(seq 1 12); do
+              dismiss_system_overlays; dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
+              if grep -qi 'All sources' "$f"; then return 0; fi
+              if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f"; sleep 3; continue; fi
+              if grep -qi 'Guest' "$f"; then tap_text 'Guest' "$f"; sleep 3; continue; fi
+              sleep 2
+            done
+            return 1
+          }
+
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb emu geo fix -122.2021 47.9780 || true
+
+          APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          adb install -r -g "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          adb logcat -c
+          adb shell am start -W -n "$PKG/$ACT" >/dev/null
+          sleep 3; reach_main; dump_ui main
+          grep -qi 'All sources' "$RUNNER_TEMP/main.xml"
+          grep -qi 'All jobs' "$RUNNER_TEMP/main.xml"
+          grep -Fq '$15+' "$RUNNER_TEMP/main.xml"
+
+          # Source: must cause a backend reload and update the selected source.
+          tap_text 'All sources' "$RUNNER_TEMP/main.xml"; sleep 1; dump_ui source-menu
+          tap_text 'The Muse' "$RUNNER_TEMP/source-menu.xml"; sleep 1; dump_ui source-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/source-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/source-selected.xml"; fi
+          sleep 4; dismiss_system_overlays; dump_ui after-source
+          grep -q 'The Muse' "$RUNNER_TEMP/after-source.xml"
+
+          # Distance: exercise the normal-range reload path in the running Android app.
+          tap_text '25 mi' "$RUNNER_TEMP/after-source.xml"; sleep 1; dump_ui distance-menu
+          set_text_by_desc 'miles' '100' "$RUNNER_TEMP/distance-menu.xml"; sleep 1; dump_ui distance-selected
+          grep -q 'text="100"' "$RUNNER_TEMP/distance-selected.xml"
+          if grep -q 'Apply' "$RUNNER_TEMP/distance-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/distance-selected.xml"; fi
+          sleep 4; dismiss_system_overlays; dump_ui after-distance
+          grep -q '100 mi' "$RUNNER_TEMP/after-distance.xml"
+
+          # Category: V9.4.70 must issue a fresh request with &what= rather than only
+          # filtering the previously loaded device list.
+          tap_text 'All jobs' "$RUNNER_TEMP/after-distance.xml"; sleep 1; dump_ui category-menu
+          grep -q 'Warehouse &amp; Logistics\|Warehouse & Logistics' "$RUNNER_TEMP/category-menu.xml"
+          tap_text 'Warehouse' "$RUNNER_TEMP/category-menu.xml"; sleep 1; dump_ui category-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/category-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/category-selected.xml"; fi
+          sleep 5; dismiss_system_overlays; dump_ui after-category
+          grep -q 'Warehouse &amp; Logistics\|Warehouse & Logistics' "$RUNNER_TEMP/after-category.xml"
+
+          # Return to All jobs so the pay test is independent of a narrow category.
+          tap_text 'Warehouse' "$RUNNER_TEMP/after-category.xml"; sleep 1; dump_ui category-reset-menu
+          tap_text 'All jobs' "$RUNNER_TEMP/category-reset-menu.xml"; sleep 1; dump_ui category-reset-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/category-reset-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/category-reset-selected.xml"; fi
+          sleep 4; dismiss_system_overlays; dump_ui before-pay
+          grep -q 'All jobs' "$RUNNER_TEMP/before-pay.xml"
+
+          # Pay: move the live SeekBar. onStopTrackingTouch must now refresh jobs via
+          # refreshForRangeChange(), while keeping the loading-screen path from Step 1.
+          tap_text '$15+' "$RUNNER_TEMP/before-pay.xml"; sleep 1; dump_ui pay-menu
+          set_seekbar_percent "$RUNNER_TEMP/pay-menu.xml" 45
+          sleep 1; dump_ui pay-selected
+          if grep -q 'Apply' "$RUNNER_TEMP/pay-selected.xml"; then tap_text 'Apply' "$RUNNER_TEMP/pay-selected.xml"; else adb shell input keyevent KEYCODE_BACK; fi
+          sleep 5; dismiss_system_overlays; dump_ui after-pay
+          python3 - <<'PY'
+          import os,re,html
+          s=open(os.environ['RUNNER_TEMP']+'/after-pay.xml').read()
+          texts=[html.unescape(x) for x in re.findall(r'text="([^"]*)"',s)]
+          pays=[x for x in texts if re.fullmatch(r'\$\d+\+',x)]
+          print('PAY_LABELS_AFTER_CHANGE=',pays)
+          if not pays or pays[0] == '$15+': raise SystemExit('pay filter did not update from $15+')
+          PY
+
+          # App must remain healthy after all four Step 2 filter transitions.
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/after-pay.xml"
+          adb exec-out screencap -p > "$RUNNER_TEMP/step2-final.png"
+          if adb logcat -d -v brief | grep -E 'FATAL EXCEPTION.*com\.jobbubble\.app|Process: com\.jobbubble\.app.*FATAL'; then
+            echo 'JobBubble crashed during Step 2 filter verification'; exit 1
+          fi
+          echo 'PASS: source, distance, category, and pay filter transitions completed in the running app'
+          SH
+          chmod +x "$RUNNER_TEMP/verify-step2.sh"
+
+      - name: Run Android emulator Step 2 verification
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-snapshot -wipe-data
+          script: bash "$RUNNER_TEMP/verify-step2.sh"
+
+      - name: Upload Step 2 verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobBubble-Step2-filter-verification
+          path: |
+            ${{ runner.temp }}/main.xml
+            ${{ runner.temp }}/source-*.xml
+            ${{ runner.temp }}/after-source.xml
+            ${{ runner.temp }}/distance-*.xml
+            ${{ runner.temp }}/after-distance.xml
+            ${{ runner.temp }}/category-*.xml
+            ${{ runner.temp }}/after-category.xml
+            ${{ runner.temp }}/before-pay.xml
+            ${{ runner.temp }}/pay-*.xml
+            ${{ runner.temp }}/after-pay.xml
+            ${{ runner.temp }}/step2-final.png
+            ${{ runner.temp }}/overlay-*.xml
+          if-no-files-found: warn
