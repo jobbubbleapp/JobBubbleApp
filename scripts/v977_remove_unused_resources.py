@@ -40,7 +40,7 @@ for kind,name,path in candidates:
     ]
     refs=[]
     for other in all_files:
-        if other.resolve() == path.resolve():
+        if other.resolve() == path.resolve() or not other.is_file():
             continue
         try: text=other.read_text(encoding='utf-8')
         except UnicodeDecodeError: continue
