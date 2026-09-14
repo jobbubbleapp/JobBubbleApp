@@ -38,6 +38,7 @@ steps = [
     'v970_filter_reload_fix.py',
     'v971_backend_pay_filter.py',
     'v972_cluster_split_animation.py',
+    'v973_api_qualified_system_bars.py',
 ]
 
 for script in steps:
