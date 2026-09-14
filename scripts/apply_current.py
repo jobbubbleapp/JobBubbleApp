@@ -33,6 +33,7 @@ steps = [
     'v966a_disable_logo_request.py',
     'v966_legal_help_no_company_logos.py',
     'v967_options_legal_links.py',
+    'v968_legal_links_help_only.py',
 ]
 
 for script in steps:
