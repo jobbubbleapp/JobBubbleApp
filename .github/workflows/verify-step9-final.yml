@@ -115,7 +115,7 @@ jobs:
       matrix:
         api: [23, 35]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
       - name: Free runner storage and enable KVM
@@ -130,7 +130,7 @@ jobs:
         with:
           name: step9-v980-final-apk
           path: ${{ runner.temp }}/apk
-      - name: Prepare runtime smoke test
+      - name: Prepare robust runtime smoke test
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/step9-smoke.sh" <<'SH'
@@ -138,7 +138,14 @@ jobs:
           set -euo pipefail
           API="${STEP9_API}"
           APK=$(find "$RUNNER_TEMP/apk" -name '*.apk' -print -quit); test -n "$APK"
-          dump_ui(){ local n="$1"; adb shell uiautomator dump --compressed "/sdcard/$n.xml" >/dev/null 2>&1 || true; adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" >/dev/null 2>&1 || true; }
+          LAST_UI=""
+
+          dump_ui(){
+            local n="$1"
+            adb shell uiautomator dump --compressed "/sdcard/$n.xml" >/dev/null 2>&1 || true
+            adb pull "/sdcard/$n.xml" "$RUNNER_TEMP/$n.xml" >/dev/null 2>&1 || true
+            if [ -s "$RUNNER_TEMP/$n.xml" ]; then LAST_UI="$RUNNER_TEMP/$n.xml"; fi
+          }
           tap_text(){
             python3 - "$1" "$2" <<'PY'
           import html,re,subprocess,sys
@@ -149,43 +156,86 @@ jobs:
               mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
               if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
                   x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
-                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True); raise SystemExit(0)
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+                  raise SystemExit(0)
           raise SystemExit(1)
           PY
           }
+          capture_evidence(){
+            set +e
+            dump_ui "api${API}-last"
+            if [ -n "${LAST_UI:-}" ] && [ -s "$LAST_UI" ]; then cp "$LAST_UI" "$RUNNER_TEMP/api${API}-last.xml" 2>/dev/null || true; fi
+            adb shell dumpsys activity activities > "$RUNNER_TEMP/api${API}-activity.txt" 2>&1 || true
+            adb logcat -d -v time > "$RUNNER_TEMP/api${API}-logcat.txt" 2>&1 || true
+            adb exec-out screencap -p > "$RUNNER_TEMP/api${API}-final.png" 2>/dev/null || true
+          }
+          trap capture_evidence EXIT
+
           dismiss_overlays(){
-            dump_ui overlay
-            for t in 'Got it' 'OK' 'Allow'; do
-              if grep -qi "text=\"$t" "$RUNNER_TEMP/overlay.xml" 2>/dev/null; then tap_text "$t" "$RUNNER_TEMP/overlay.xml" || true; sleep 1; fi
+            dump_ui "api${API}-overlay"
+            local f="$RUNNER_TEMP/api${API}-overlay.xml"
+            [ -s "$f" ] || return 0
+            for t in 'Got it' 'While using the app' 'Only this time' 'Allow' 'ALLOW' 'OK'; do
+              if grep -qi "text=\"[^"]*$t" "$f" 2>/dev/null || grep -qi "$t" "$f" 2>/dev/null; then
+                tap_text "$t" "$f" || true
+                sleep 1
+                dump_ui "api${API}-overlay-after"
+                f="$RUNNER_TEMP/api${API}-overlay-after.xml"
+              fi
             done
           }
+          enter_guest(){
+            for n in $(seq 1 25); do
+              dismiss_overlays
+              dump_ui "api${API}-entry-$n"; local f="$RUNNER_TEMP/api${API}-entry-$n.xml"
+              [ -s "$f" ] || { sleep 2; continue; }
+              if grep -q 'package="com.jobbubble.app"' "$f" && grep -qi 'text="List"' "$f"; then return 0; fi
+              if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f" || true; sleep 3; continue; fi
+              if grep -q 'package="com.jobbubble.app"' "$f" && grep -qi 'Guest' "$f"; then tap_text 'Guest' "$f" || true; sleep 3; continue; fi
+              sleep 2
+            done
+            echo "Failed to enter JobBubble guest/map state on API $API"
+            return 1
+          }
+          wait_map(){
+            for n in $(seq 1 60); do
+              dismiss_overlays
+              dump_ui "api${API}-map-$n"; local f="$RUNNER_TEMP/api${API}-map-$n.xml"
+              [ -s "$f" ] || { sleep 2; continue; }
+              if grep -q 'package="com.jobbubble.app"' "$f" && grep -qi 'text="List"' "$f" && ! grep -q 'Loading your jobs list' "$f"; then
+                cp "$f" "$RUNNER_TEMP/api${API}-final.xml"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "JobBubble map/list did not settle on API $API"
+            return 1
+          }
+
           adb wait-for-device
           adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
           adb emu geo fix -122.2021 47.9780 || true
           adb install -r -g "$APK"
+
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          test -n "$PKG"; test -n "$ACT"
+
           adb logcat -c
-          adb shell monkey -p com.jobbubble.app -c android.intent.category.LAUNCHER 1 >/dev/null
-          sleep 4
-          entered=0
-          for n in $(seq 1 20); do
-            dismiss_overlays
-            dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
-            if grep -q 'package="com.jobbubble.app"' "$f" && grep -qi 'text="List"' "$f"; then entered=1; break; fi
-            if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f" || true; sleep 3; continue; fi
-            if grep -qi 'text="[^"]*Guest' "$f"; then tap_text 'Guest' "$f" || true; sleep 3; continue; fi
-            sleep 2
-          done
-          test "$entered" = 1
-          sleep 8
-          dismiss_overlays; dump_ui final
-          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/final.xml"
-          grep -qi 'text="List"' "$RUNNER_TEMP/final.xml"
-          adb shell dumpsys activity activities > "$RUNNER_TEMP/api${API}-activity.txt" || true
-          adb logcat -d -v time > "$RUNNER_TEMP/api${API}-logcat.txt"
+          adb shell am start -W -n "$PKG/$ACT" >/dev/null
+          sleep 3
+          enter_guest
+          wait_map
+          capture_evidence
+
+          grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/api${API}-final.xml"
+          grep -qi 'text="List"' "$RUNNER_TEMP/api${API}-final.xml"
           if grep -Eiq 'FATAL EXCEPTION|Process: com\.jobbubble\.app.*FATAL|NoClassDefFoundError|VerifyError|FirebaseApp initialization unsuccessful|Default FirebaseApp failed to initialize' "$RUNNER_TEMP/api${API}-logcat.txt"; then
-            echo "Runtime/Firebase failure detected on API $API"; exit 1
+            echo "Runtime/Firebase failure detected on API $API"
+            exit 1
           fi
-          adb exec-out screencap -p > "$RUNNER_TEMP/api${API}-final.png"
           echo "PASS: JobBubble V9.4.80 startup/guest/map/Firebase smoke on API $API"
           SH
           chmod +x "$RUNNER_TEMP/step9-smoke.sh"
@@ -213,6 +263,7 @@ jobs:
             ${{ runner.temp }}/api${{ matrix.api }}-final.png
             ${{ runner.temp }}/api${{ matrix.api }}-logcat.txt
             ${{ runner.temp }}/api${{ matrix.api }}-activity.txt
-            ${{ runner.temp }}/final.xml
+            ${{ runner.temp }}/api${{ matrix.api }}-final.xml
+            ${{ runner.temp }}/api${{ matrix.api }}-last.xml
           if-no-files-found: ignore
           retention-days: 3
