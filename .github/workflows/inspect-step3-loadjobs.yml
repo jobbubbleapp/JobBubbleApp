@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect current generated filter lifecycle
+      - name: Inspect current generated pay lifecycle
         shell: bash
         run: |
           set -euo pipefail
@@ -26,15 +26,25 @@ jobs:
           P=$(dirname "$GRADLEW")
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          OUT="$RUNNER_TEMP/step3-pay-diagnostic.txt"
 
-          echo '===== filter and refresh methods ====='
-          grep -n -E -A120 -B20 'void applyFilters\(|void refreshForRangeChange\(|String backendCategoryQuery\(|String backendSourceParam\(|String buildJobRequestUrl\(' "$MAIN" | head -1800 || true
+          {
+            echo '===== buildJobRequestUrl ====='
+            grep -n -A120 -B15 'String buildJobRequestUrl' "$MAIN" || true
+            echo '===== min pay declarations/usages ====='
+            grep -n -E -A18 -B12 'minPay|minimumPay|payMin|payFilter|payFloor' "$MAIN" || true
+            echo '===== pay/salary parse/filter snippets ====='
+            grep -n -E -A28 -B16 'salary|hourly|parse.*[Pp]ay|extract.*[Pp]ay|matches.*[Pp]ay|[Pp]ay.*match' "$MAIN" || true
+            echo '===== refresh ====='
+            grep -n -A50 -B15 'void refreshForRangeChange' "$MAIN" || true
+            echo '===== version ====='
+            grep -n -E 'versionName|VERSION|V9\.4\.' "$P/app/build.gradle" "$P/app/build.gradle.kts" "$MAIN" 2>/dev/null || true
+          } > "$OUT"
+          cat "$OUT"
 
-          echo '===== filter controls/callbacks ====='
-          grep -n -E -A50 -B20 'activeCategory|maxDistanceMiles|minPay|selectedSource|show.*Filter|show.*Sheet|onStopTrackingTouch|All jobs|All sources' "$MAIN" | head -2200 || true
-
-          echo '===== pay parsing/matching ====='
-          grep -n -E -A35 -B20 'pay|salary|hourly|minPay|maxPay|extract.*Pay|parse.*Pay|matches.*Pay' "$MAIN" | head -1800 || true
-
-          echo '===== cache/refined result paths ====='
-          grep -n -E -A45 -B20 'jobsCache|persistJobsCache|load.*Cache|requestRefinedJobs|refinement_pending|jobs\.clear|jobs\.addAll' "$MAIN" | head -1800 || true
+      - name: Upload targeted Step 3 diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: step3-pay-diagnostic
+          path: ${{ runner.temp }}/step3-pay-diagnostic.txt
+          retention-days: 1
