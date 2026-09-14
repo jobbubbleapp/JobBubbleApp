@@ -39,6 +39,7 @@ steps = [
     'v971_backend_pay_filter.py',
     'v972_cluster_split_animation.py',
     'v973_api_qualified_system_bars.py',
+    'v974_sync_android_version.py',
 ]
 
 for script in steps:
