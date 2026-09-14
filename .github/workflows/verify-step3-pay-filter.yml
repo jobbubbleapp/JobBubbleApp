@@ -1,0 +1,290 @@
+name: Verify JobBubble Step 3 Pay Filter
+
+on:
+  push:
+    branches:
+      - feature/code-cleanup-v948
+    paths:
+      - '.github/workflows/verify-step3-pay-filter.yml'
+      - 'scripts/v971_backend_pay_filter.py'
+      - 'scripts/apply_current.py'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-step3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Free runner storage and enable KVM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+
+      - name: Verify production Step 3 pay semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,time,urllib.parse,urllib.request
+
+          base='https://jobbubble-backend-1.onrender.com'
+          def get(path, params=None):
+              url=base+path
+              if params: url+='?'+urllib.parse.urlencode(params)
+              last=None
+              for attempt in range(6):
+                  try:
+                      req=urllib.request.Request(url,headers={'User-Agent':'JobBubble-Step3-Verification/9.4.71'})
+                      with urllib.request.urlopen(req,timeout=100) as r:
+                          return json.load(r)
+                  except Exception as exc:
+                      last=exc
+                      if attempt==5: raise
+                      print('retrying',url,exc)
+                      time.sleep(8)
+              raise last
+
+          health=get('/health')
+          assert health.get('status')=='ok',health
+          assert health.get('version')=='9.4.48',health.get('version')
+          print('PASS production health version',health.get('version'))
+
+          def hourly(job):
+              try: amount=float(job.get('salary_min') or 0)
+              except Exception: return None
+              if amount<=0: return None
+              period=str(job.get('salary_period') or '').lower()
+              if period=='year': return amount/2080.0
+              if period=='month': return amount*12.0/2080.0
+              if period=='week': return amount*52.0/2080.0
+              if period=='day': return amount/8.0
+              return amount
+
+          common={'where':'Everett, WA','lat':'47.9780','lon':'-122.2021','radius':'100','min_pay_hourly':'25','refresh':'1'}
+          for source in ('adzuna','usajobs','ats'):
+              data=get('/jobs',dict(common,source=source))
+              assert float(data.get('min_pay_hourly',-1))==25.0,(source,data.get('min_pay_hourly'))
+              assert data.get('source_filter')==source,(source,data.get('source_filter'))
+              jobs=data.get('jobs') or []
+              if source=='adzuna': assert all(str(j.get('source','')).lower()=='adzuna' for j in jobs)
+              if source=='usajobs': assert all(str(j.get('source','')).lower()=='usajobs' for j in jobs)
+              if source=='ats': assert all(str(j.get('source','')).lower().startswith('ats/') for j in jobs)
+              known=[hourly(j) for j in jobs]
+              known=[x for x in known if x is not None]
+              assert all(x>=25.0-1e-9 for x in known),(source,min(known) if known else None)
+              print(f'PASS production source={source} jobs={len(jobs)} known_pay={len(known)} min_hourly={min(known) if known else "unknown-only"}')
+          PY
+
+      - name: Extract, patch, and validate V9.4.71 source
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fq 'url.append("&min_pay_hourly=").append(minPay);' "$MAIN"
+          grep -Fq 'period.equalsIgnoreCase("day"))pay=pay/8.0' "$MAIN"
+          grep -Fq '(j.pay<=0||j.pay>=minPay)' "$MAIN"
+          grep -Fq 'if(generation!=jobLoadGeneration)return;' "$MAIN"
+          grep -Fq 'showJobsLoading();' "$MAIN"
+          grep -Fxq '9.4.71' "$P/VERSION.txt"
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+          echo "main_file=$MAIN" >> "$GITHUB_OUTPUT"
+          echo 'PASS V9.4.71 source wiring'
+
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+                  if n:
+                      found+=1;m.write_text(t)
+          assert found,'Maps metadata target not found'
+          PY
+
+      - name: Build V9.4.71 APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        run: chmod +x gradlew && ./gradlew --no-daemon --max-workers=2 assembleDebug
+
+      - name: Prepare Step 3 runtime verifier
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/verify-step3.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          dump_ui() {
+            local name="$1"
+            adb shell uiautomator dump --compressed "/sdcard/$name.xml" >/dev/null || true
+            adb pull "/sdcard/$name.xml" "$RUNNER_TEMP/$name.xml" >/dev/null || true
+          }
+
+          tap_text() {
+            local needle="$1" file="$2"
+            python3 - "$needle" "$file" <<'PY'
+          import html,re,subprocess,sys
+          needle,path=sys.argv[1:]
+          for node in re.findall(r'<node[^>]*>',open(path).read()):
+              mt=re.search(r'text="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if mt and mb and needle.casefold() in html.unescape(mt.group(1)).casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+                  raise SystemExit(0)
+          raise SystemExit('missing text '+needle)
+          PY
+          }
+
+          set_text_by_desc() {
+            local desc="$1" value="$2" file="$3"
+            python3 - "$desc" "$value" "$file" <<'PY'
+          import html,re,subprocess,sys
+          desc,value,path=sys.argv[1:]
+          for node in re.findall(r'<node[^>]*>',open(path).read()):
+              md=re.search(r'content-desc="([^"]*)"',node); mb=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+              if md and mb and html.unescape(md.group(1)).casefold()==desc.casefold():
+                  x=(int(mb[1])+int(mb[3]))//2; y=(int(mb[2])+int(mb[4]))//2
+                  subprocess.run(['adb','shell','input','tap',str(x),str(y)],check=True)
+                  subprocess.run(['adb','shell','input','keyevent','KEYCODE_MOVE_END'],check=True)
+                  for _ in range(8): subprocess.run(['adb','shell','input','keyevent','KEYCODE_DEL'],check=True)
+                  subprocess.run(['adb','shell','input','text',value],check=True)
+                  subprocess.run(['adb','shell','input','keyevent','KEYCODE_BACK'],check=True)
+                  raise SystemExit(0)
+          raise SystemExit('missing content-desc '+desc)
+          PY
+          }
+
+          dismiss_overlays() {
+            dump_ui system-overlay
+            if grep -q 'Got it' "$RUNNER_TEMP/system-overlay.xml" 2>/dev/null; then tap_text 'Got it' "$RUNNER_TEMP/system-overlay.xml"; sleep 1; fi
+          }
+
+          enter_guest() {
+            for n in $(seq 1 15); do
+              dismiss_overlays; dump_ui "entry-$n"; f="$RUNNER_TEMP/entry-$n.xml"
+              if grep -q 'text="List"' "$f"; then return 0; fi
+              if grep -qi 'Continue as Guest' "$f"; then tap_text 'Continue as Guest' "$f"; sleep 3; continue; fi
+              if grep -qi 'Guest' "$f"; then tap_text 'Guest' "$f"; sleep 3; continue; fi
+              sleep 2
+            done
+            return 1
+          }
+
+          wait_for_map() {
+            local out="$1"
+            for n in $(seq 1 50); do
+              dismiss_overlays; dump_ui "$out-wait-$n"; f="$RUNNER_TEMP/$out-wait-$n.xml"
+              if grep -q 'package="com.jobbubble.app"' "$f" && grep -q 'text="List"' "$f" && ! grep -q 'Loading your jobs list' "$f"; then
+                cp "$f" "$RUNNER_TEMP/$out.xml"; return 0
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for JobBubble map after $out"; return 1
+          }
+
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb emu geo fix -122.2021 47.9780 || true
+
+          APK=$(find "${{ steps.project.outputs.project_dir }}" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          adb install -r -g "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          PKG=$("$AAPT" dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+          ACT=$("$AAPT" dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")
+          adb logcat -c
+          adb shell am start -W -n "$PKG/$ACT" >/dev/null
+          sleep 3; enter_guest; wait_for_map before-pay
+          grep -Fq '$15+' "$RUNNER_TEMP/before-pay.xml"
+
+          tap_text '$15+' "$RUNNER_TEMP/before-pay.xml"; sleep 1; dump_ui pay-dialog
+          grep -q 'Minimum hourly pay' "$RUNNER_TEMP/pay-dialog.xml"
+          set_text_by_desc 'dollars per hour' '35' "$RUNNER_TEMP/pay-dialog.xml"
+          sleep 1; dump_ui pay-edited
+          tap_text 'Apply' "$RUNNER_TEMP/pay-edited.xml"
+
+          saw_loading=0
+          for n in $(seq 1 12); do
+            dump_ui "pay-transition-$n"
+            if grep -q 'Loading your jobs list' "$RUNNER_TEMP/pay-transition-$n.xml"; then saw_loading=1; fi
+            if grep -q 'text="List"' "$RUNNER_TEMP/pay-transition-$n.xml" && ! grep -q 'Loading your jobs list' "$RUNNER_TEMP/pay-transition-$n.xml"; then break; fi
+            sleep 1
+          done
+          echo "SAW_LOADING=$saw_loading"
+          wait_for_map after-pay
+          grep -Fq '$35+' "$RUNNER_TEMP/after-pay.xml"
+
+          adb logcat -d -v brief > "$RUNNER_TEMP/step3-logcat.txt"
+          grep -E 'JobBubbleMuse.*job request=.*min_pay_hourly=35([& ]|$)' "$RUNNER_TEMP/step3-logcat.txt"
+          if grep -E 'FATAL EXCEPTION.*com\.jobbubble\.app|Process: com\.jobbubble\.app.*FATAL' "$RUNNER_TEMP/step3-logcat.txt"; then
+            echo 'JobBubble crashed during Step 3 verification'; exit 1
+          fi
+          adb exec-out screencap -p > "$RUNNER_TEMP/step3-final.png"
+          echo 'PASS: V9.4.71 pay change reloaded production jobs with min_pay_hourly=35 and app remained stable'
+          SH
+          chmod +x "$RUNNER_TEMP/verify-step3.sh"
+
+      - name: Run Android emulator Step 3 verification
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash "$RUNNER_TEMP/verify-step3.sh"
+
+      - name: Upload Step 3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step3-v971-evidence
+          path: |
+            ${{ runner.temp }}/step3-final.png
+            ${{ runner.temp }}/step3-logcat.txt
+            ${{ runner.temp }}/before-pay.xml
+            ${{ runner.temp }}/after-pay.xml
+          if-no-files-found: ignore
+          retention-days: 3
