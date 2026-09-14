@@ -1,9 +1,10 @@
-name: Verify Step 9 V9.4.77 Unused Resources
+name: Verify Step 9 V9.4.77 Cleanup
 
 on:
   push:
     branches: [feature/step9-cleanup-testing]
     paths:
+      - 'scripts/v976_accessibility_i18n.py'
       - 'scripts/v977_remove_unused_resources.py'
       - 'scripts/apply_current.py'
       - '.github/workflows/verify-step9-v977-unused.yml'
@@ -21,7 +22,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Materialize V9.4.77
+      - name: Materialize current V9.4.77 cleanup state
         shell: bash
         run: |
           set -euo pipefail
@@ -32,7 +33,7 @@ jobs:
           test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.77'
           grep -Eq '^\s*targetSdk\s+35\s*$' "$P/app/build.gradle"
           grep -Eq '^\s*versionCode\s+84\s*$' "$P/app/build.gradle"
-      - name: Unit tests lint and build after resource removal
+      - name: Unit tests lint and build after accessibility and resource cleanup
         shell: bash
         working-directory: ${{ env.P }}
         run: |
@@ -46,21 +47,18 @@ jobs:
           for line in lines:
               m=re.search(r'\[([^\]]+)\]\s*$',line)
               if m:c[m.group(1)]+=1
-          assert c['UnusedResources']==0,c
-          assert c['HardcodedText']==0,c
-          assert c['ContentDescription']==0,c
-          assert c['RtlHardcoded']==0,c
-          assert c['RtlSymmetry']==0,c
+          for cleared in ('UnusedResources','HardcodedText','ContentDescription','RtlHardcoded','RtlSymmetry'):
+              assert c[cleared]==0,(cleared,c)
           tests=failures=errors=0
           for f in glob.glob('app/build/test-results/testDebugUnitTest/*.xml'):
               r=ET.parse(f).getroot(); tests+=int(r.attrib.get('tests',0)); failures+=int(r.attrib.get('failures',0)); errors+=int(r.attrib.get('errors',0))
           assert tests>=4 and failures==0 and errors==0,(tests,failures,errors)
-          print(f'PASS: all lint-reported unused resources removed; {tests} unit tests pass')
+          print(f'PASS: accessibility/i18n and unused-resource groups cleared; {tests} unit tests pass')
           print('Remaining warning groups:',dict(c))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: step9-v977-unused-evidence
+          name: step9-v977-cleanup-evidence
           path: |
             /tmp/v977-pipeline.txt
             /tmp/v977-gradle.txt
