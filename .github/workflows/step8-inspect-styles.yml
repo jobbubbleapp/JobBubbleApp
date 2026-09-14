@@ -1,0 +1,22 @@
+name: Step 8 Inspect Theme Resources
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths: ['.github/workflows/step8-inspect-styles.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize and print styles
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" >/dev/null
+          echo '===== STYLES FILES ====='
+          find "$P/app/src/main/res" -type f \( -name 'styles.xml' -o -name 'themes.xml' \) -print -exec sh -c 'echo "--- $1"; nl -ba "$1"' _ {} \;
