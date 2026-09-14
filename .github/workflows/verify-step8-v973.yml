@@ -1,0 +1,180 @@
+name: Verify Step 8 V9.4.73
+
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths:
+      - '.github/workflows/verify-step8-v973.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Re-audit every tracked repository text and patch file
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files > /tmp/step8-final-tracked-files.txt
+          python3 - <<'PY'
+          import json,pathlib,py_compile,re,subprocess
+          files=[pathlib.Path(x.decode()) for x in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if x]
+          conflict=re.compile(r'(?m)^(?:<<<<<<< .+|=======|>>>>>>> .+)$')
+          text_ext={'.py','.yml','.yaml','.json','.md','.txt','.xml','.properties','.gradle','.kts','.toml','.java','.kt','.sh'}
+          bad=[]
+          for p in files:
+              if p.suffix.lower()=='.py': py_compile.compile(str(p),doraise=True)
+              if p.suffix.lower()=='.json': json.loads(p.read_text(encoding='utf-8'))
+              if p.suffix.lower() in text_ext or p.name=='.gitignore':
+                  b=p.read_bytes()
+                  if b'\x00' in b: bad.append(f'NUL byte: {p}'); continue
+                  try:s=b.decode('utf-8')
+                  except UnicodeDecodeError as e: bad.append(f'Invalid UTF-8 {p}: {e}'); continue
+                  if conflict.search(s): bad.append(f'Merge conflict marker: {p}')
+          if bad:
+              print('\n'.join(bad)); raise SystemExit(1)
+          print(f'PASS: re-audited {len(files)} tracked files and compiled every Python patch')
+          PY
+          ruby -e 'require "yaml"; files=`git ls-files "*.yml" "*.yaml"`.lines.map(&:strip); files.each{|f| YAML.load_file(f, aliases: true)}; puts "PASS: parsed #{files.length} YAML files"'
+          unzip -tq JobBubble-V9.4.41-RESET-BUTTON.zip
+
+      - name: Materialize current V9.4.73 source
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          test -n "$G"
+          P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" | tee /tmp/step8-pipeline.txt
+          test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.73'
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+          find "$P" -type f | sort > /tmp/step8-materialized-files.txt
+
+      - name: Verify API-qualified theme fix and all materialized XML
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,pathlib,re,xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['PROJECT_DIR'])/'app/src/main/res'
+          base=root/'values/styles.xml'; v27=root/'values-v27/styles.xml'; v29=root/'values-v29/styles.xml'
+          for p in (base,v27,v29):
+              assert p.is_file(), p
+              ET.parse(p)
+          b=base.read_text(); s27=v27.read_text(); s29=v29.read_text()
+          assert 'android:windowLightNavigationBar' not in b
+          assert 'android:enforceNavigationBarContrast' not in b
+          assert 'android:enforceStatusBarContrast' not in b
+          assert s27.count('android:windowLightNavigationBar')==1
+          assert 'android:enforceNavigationBarContrast' not in s27
+          assert 'android:enforceStatusBarContrast' not in s27
+          assert s29.count('android:windowLightNavigationBar')==1
+          assert s29.count('android:enforceNavigationBarContrast')==1
+          assert s29.count('android:enforceStatusBarContrast')==1
+          xmls=list(root.rglob('*.xml'))
+          for p in xmls: ET.parse(p)
+          print(f'PASS: API-specific system-bar attrs are qualified correctly; parsed {len(xmls)} resource XML files')
+          PY
+
+      - name: Verify prior feature invariants survived Step 8 fix
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN="$PROJECT_DIR/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          grep -Fq 'min_pay_hourly' "$MAIN"
+          grep -Fq 'showJobsLoading()' "$MAIN"
+          grep -Fq 'jobLoadGeneration' "$MAIN"
+          grep -Fq 'clusterSplitAnimationStart' "$MAIN"
+          grep -Fq 'showClusterSideList' "$MAIN"
+          echo 'PASS: Steps 1-4 and pay-filter app invariants remain present'
+
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          root=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in root.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' not in t: continue
+              pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+              t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+              if n: found+=1; m.write_text(t)
+          assert found==1, found
+          PY
+
+      - name: Resolve dependencies, lint, test, and build
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --max-workers=2 app:dependencies --configuration debugRuntimeClasspath > /tmp/step8-final-dependencies.txt
+          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug | tee /tmp/step8-final-gradle.txt
+          REPORT=$(find app/build -type f -name 'lint-results-debug.txt' -print -quit)
+          test -n "$REPORT"
+          cp "$REPORT" /tmp/step8-final-lint.txt
+          if grep -q ' Error:' /tmp/step8-final-lint.txt; then
+            echo 'Lint errors remain:'; grep -n -B2 -A4 ' Error:' /tmp/step8-final-lint.txt; exit 1
+          fi
+          echo 'PASS: lint contains zero errors'
+          tail -n 5 /tmp/step8-final-lint.txt || true
+          APK=$(find . -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          test -n "$APK" && test -s "$APK"
+          cp "$APK" /tmp/JobBubble-V9.4.73-Step8.apk
+
+      - name: Validate built APK metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          "$AAPT" dump badging /tmp/JobBubble-V9.4.73-Step8.apk | tee /tmp/step8-apk-badging.txt
+          grep -Fq "package: name='com.jobbubble.app'" /tmp/step8-apk-badging.txt
+          grep -Fq "sdkVersion:'23'" /tmp/step8-apk-badging.txt
+          grep -Fq 'launchable-activity:' /tmp/step8-apk-badging.txt
+          echo 'PASS: APK package, minSdk 23, and launch activity are valid'
+
+      - name: Upload final Step 8 Android audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step8-v973-audit-evidence
+          path: |
+            /tmp/step8-final-tracked-files.txt
+            /tmp/step8-materialized-files.txt
+            /tmp/step8-pipeline.txt
+            /tmp/step8-final-dependencies.txt
+            /tmp/step8-final-gradle.txt
+            /tmp/step8-final-lint.txt
+            /tmp/step8-apk-badging.txt
+            /tmp/JobBubble-V9.4.73-Step8.apk
+          if-no-files-found: ignore
+          retention-days: 3
