@@ -20,6 +20,7 @@ steps = [
     'v970_filter_reload_fix.py','v971_backend_pay_filter.py','v972_cluster_split_animation.py',
     'v973_api_qualified_system_bars.py','v974_sync_android_version.py','v975_unit_testable_job_logic.py',
     'v976_accessibility_i18n.py','v977_remove_unused_resources.py','v978_androidx_material.py',
+    'v979_google_play_services.py',
 ]
 
 for script in steps:
