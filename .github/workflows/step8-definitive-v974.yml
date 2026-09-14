@@ -1,0 +1,310 @@
+name: Step 8 Definitive V9.4.74 Audit
+
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths: ['.github/workflows/step8-definitive-v974.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  audit-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Audit every tracked repository file
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files > /tmp/v974-tracked-files.txt
+          python3 - <<'PY'
+          import json,pathlib,py_compile,re,subprocess
+          files=[pathlib.Path(x.decode()) for x in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if x]
+          conflict=re.compile(r'(?m)^(?:<<<<<<< .+|=======|>>>>>>> .+)$')
+          text_ext={'.py','.yml','.yaml','.json','.md','.txt','.xml','.properties','.gradle','.kts','.toml','.java','.kt','.sh'}
+          bad=[]
+          for p in files:
+              if p.suffix.lower()=='.py': py_compile.compile(str(p),doraise=True)
+              if p.suffix.lower()=='.json': json.loads(p.read_text(encoding='utf-8'))
+              if p.suffix.lower() in text_ext or p.name=='.gitignore':
+                  b=p.read_bytes()
+                  if b'\x00' in b: bad.append(f'NUL byte: {p}'); continue
+                  try:s=b.decode('utf-8')
+                  except UnicodeDecodeError as e: bad.append(f'Invalid UTF-8 {p}: {e}'); continue
+                  if conflict.search(s): bad.append(f'Merge-conflict marker: {p}')
+          if bad:
+              print('\n'.join(bad)); raise SystemExit(1)
+          print(f'PASS: audited {len(files)} tracked files and compiled all Python patches')
+          PY
+          ruby -e 'require "yaml"; f=`git ls-files "*.yml" "*.yaml"`.lines.map(&:strip); f.each{|x| YAML.load_file(x, aliases: true)}; puts "PASS: parsed #{f.length} YAML files"'
+          unzip -tq JobBubble-V9.4.41-RESET-BUTTON.zip
+
+      - name: Materialize current V9.4.74 source
+        id: p
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); test -n "$G"; P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" | tee /tmp/v974-pipeline.txt
+          test "$(tr -d '\r\n ' < "$P/VERSION.txt")" = '9.4.74'
+          grep -Eq '^\s*versionCode\s+81\s*$' "$P/app/build.gradle"
+          grep -Eq "^\s*versionName\s+['\"]9\.4\.74['\"]\s*$" "$P/app/build.gradle"
+          echo "dir=$P" >> "$GITHUB_OUTPUT"
+          find "$P" -type f | sort > /tmp/v974-materialized-files.txt
+
+      - name: Audit all materialized resources and feature invariants
+        env:
+          P: ${{ steps.p.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,pathlib,re,xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['P']); res=root/'app/src/main/res'
+          conflict=re.compile(r'(?m)^(?:<<<<<<< .+|=======|>>>>>>> .+)$')
+          bad=[]; text_count=0; xml_count=0
+          for p in root.rglob('*'):
+              if not p.is_file() or any(x in p.parts for x in ('.gradle','build')): continue
+              if p.suffix.lower() in {'.java','.kt','.xml','.json','.gradle','.kts','.properties','.pro','.txt','.md'} or p.name in {'gradlew','settings.gradle','build.gradle'}:
+                  text_count+=1; b=p.read_bytes()
+                  if b'\x00' in b: bad.append(f'NUL: {p}'); continue
+                  try:s=b.decode('utf-8')
+                  except UnicodeDecodeError as e: bad.append(f'UTF8 {p}: {e}'); continue
+                  if conflict.search(s): bad.append(f'Conflict marker: {p}')
+              if p.suffix.lower()=='.xml':
+                  try: ET.parse(p); xml_count+=1
+                  except Exception as e: bad.append(f'XML {p}: {e}')
+          if bad:
+              print('\n'.join(bad)); raise SystemExit(1)
+          base=(res/'values/styles.xml').read_text(); v27=(res/'values-v27/styles.xml').read_text(); v29=(res/'values-v29/styles.xml').read_text()
+          assert 'windowLightNavigationBar' not in base and 'enforceNavigationBarContrast' not in base and 'enforceStatusBarContrast' not in base
+          assert v27.count('windowLightNavigationBar')==1 and 'enforceNavigationBarContrast' not in v27 and 'enforceStatusBarContrast' not in v27
+          assert v29.count('windowLightNavigationBar')==1 and v29.count('enforceNavigationBarContrast')==1 and v29.count('enforceStatusBarContrast')==1
+          main=(root/'app/src/main/java/com/jobbubble/app/MainActivity.java').read_text()
+          for needle in ('min_pay_hourly','showJobsLoading()','jobLoadGeneration','clusterSplitAnimationStart','showClusterSideList'):
+              assert needle in main, needle
+          print(f'PASS: audited {text_count} materialized text/config files and parsed {xml_count} XML files')
+          PY
+
+      - name: Inject Maps key
+        env:
+          P: ${{ steps.p.outputs.dir }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re,pathlib
+          from xml.sax.saxutils import escape
+          root=pathlib.Path(os.environ['P']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          hit=0
+          for p in root.rglob('src/main/AndroidManifest.xml'):
+              s=p.read_text()
+              if 'com.google.android.geo.API_KEY' not in s: continue
+              pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+              s,n=pat.subn(r'\1'+key+r'\2',s,count=1)
+              if n: p.write_text(s); hit+=1
+          assert hit==1,hit
+          PY
+
+      - name: Resolve dependencies run tests lint and build APK
+        working-directory: ${{ steps.p.outputs.dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --max-workers=2 app:dependencies --configuration debugRuntimeClasspath > /tmp/v974-dependencies.txt
+          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug | tee /tmp/v974-gradle.txt
+          R=$(find app/build -name lint-results-debug.txt -print -quit); test -n "$R"; cp "$R" /tmp/v974-lint.txt
+          if grep -q ' Error:' /tmp/v974-lint.txt; then grep -n -B3 -A6 ' Error:' /tmp/v974-lint.txt; exit 1; fi
+          # These warning classes would indicate likely runtime/API/package defects.
+          for id in NewApi InlinedApi MissingPermission InvalidPackage MissingClass WrongViewCast ResourceType DuplicateIds Instantiatable; do
+            if grep -q "\[$id\]" /tmp/v974-lint.txt; then echo "High-risk lint warning remains: $id"; exit 1; fi
+          done
+          echo 'PASS: Android lint contains zero errors and no selected high-risk runtime/package warnings'
+          tail -n 4 /tmp/v974-lint.txt || true
+          A=$(find . -path '*/build/outputs/apk/debug/*.apk' -type f -print -quit); test -s "$A"; cp "$A" /tmp/JobBubble-V9.4.74-debug.apk
+
+      - name: Validate definitive APK metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1); AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          "$AAPT" dump badging /tmp/JobBubble-V9.4.74-debug.apk | tee /tmp/v974-badging.txt
+          grep -Fq "package: name='com.jobbubble.app' versionCode='81' versionName='9.4.74'" /tmp/v974-badging.txt
+          grep -Fq "sdkVersion:'23'" /tmp/v974-badging.txt
+          grep -Fq "targetSdkVersion:'35'" /tmp/v974-badging.txt
+          grep -Fq 'launchable-activity:' /tmp/v974-badging.txt
+          echo 'PASS: APK metadata is synchronized: V9.4.74 / code 81 / minSdk 23 / targetSdk 35'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step8-v974-apk
+          path: /tmp/JobBubble-V9.4.74-debug.apk
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: step8-v974-audit-evidence
+          path: |
+            /tmp/v974-tracked-files.txt
+            /tmp/v974-materialized-files.txt
+            /tmp/v974-pipeline.txt
+            /tmp/v974-dependencies.txt
+            /tmp/v974-gradle.txt
+            /tmp/v974-lint.txt
+            /tmp/v974-badging.txt
+          if-no-files-found: ignore
+          retention-days: 3
+
+  api35-runtime:
+    needs: audit-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: step8-v974-apk
+          path: ${{ runner.temp }}/apk
+      - name: Free storage and enable KVM
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"/CodeQL || true; sudo apt-get clean || true; docker system prune -af || true
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Prepare API 35 runtime verifier
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/v974-api35.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          APK="$RUNNER_TEMP/apk/JobBubble-V9.4.74-debug.apk"
+          dump(){ adb shell uiautomator dump --compressed "/sdcard/$1.xml" >/dev/null || true; adb pull "/sdcard/$1.xml" "$RUNNER_TEMP/$1.xml" >/dev/null || true; }
+          tap(){ python3 - "$1" "$2" <<'PY'
+          import html,re,subprocess,sys
+          needle,path=sys.argv[1:]; s=open(path,encoding='utf-8').read()
+          for n in re.findall(r'<node[^>]*>',s):
+              t=re.search(r'text="([^"]*)"',n); b=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',n)
+              if t and b and needle.casefold() in html.unescape(t.group(1)).casefold():
+                  subprocess.run(['adb','shell','input','tap',str((int(b[1])+int(b[3]))//2),str((int(b[2])+int(b[4]))//2)],check=True); raise SystemExit(0)
+          raise SystemExit(1)
+          PY
+          }
+          adb wait-for-device; adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'; adb emu geo fix -122.4194 37.7749 || true
+          adb install -r -g "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'|sort -V|tail -n1); AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          ACT=$("$AAPT" dump badging "$APK"|sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p"); test -n "$ACT"
+          adb logcat -c; adb shell am start -W -n "com.jobbubble.app/$ACT" | tee "$RUNNER_TEMP/v974-api35-start.txt"; sleep 3
+          for i in $(seq 1 24); do
+            dump v974-entry; f="$RUNNER_TEMP/v974-entry.xml"
+            if grep -q 'Got it' "$f"; then tap 'Got it' "$f" || true; sleep 1; continue; fi
+            if grep -q 'text="List"' "$f"; then break; fi
+            if grep -qi 'Continue as Guest' "$f"; then tap 'Continue as Guest' "$f" || true; sleep 3; continue; fi
+            if grep -qi 'Guest' "$f"; then tap 'Guest' "$f" || true; sleep 3; continue; fi
+            sleep 2
+          done
+          for i in $(seq 1 60); do
+            dump v974-ready
+            if grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/v974-ready.xml" && grep -q 'text="List"' "$RUNNER_TEMP/v974-ready.xml" && ! grep -q 'Loading your jobs list' "$RUNNER_TEMP/v974-ready.xml"; then break; fi
+            sleep 2
+          done
+          grep -q 'text="List"' "$RUNNER_TEMP/v974-ready.xml"
+          for i in 1 2 3; do adb shell input tap 540 1100; adb shell input tap 540 1100; sleep 2; done
+          dump v974-zoom; grep -q 'package="com.jobbubble.app"' "$RUNNER_TEMP/v974-zoom.xml"
+          if grep -q 'text="List"' "$RUNNER_TEMP/v974-zoom.xml"; then tap 'List' "$RUNNER_TEMP/v974-zoom.xml" || true; sleep 2; dump v974-list; fi
+          adb logcat -d -v threadtime > "$RUNNER_TEMP/v974-api35-logcat.txt"
+          ! grep -E 'FATAL EXCEPTION|ANR in com\.jobbubble\.app' "$RUNNER_TEMP/v974-api35-logcat.txt"
+          adb exec-out screencap -p > "$RUNNER_TEMP/v974-api35.png"
+          echo 'PASS: V9.4.74 API 35 guest/jobs/map/List runtime passed'
+          SH
+          chmod +x "$RUNNER_TEMP/v974-api35.sh"
+      - uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_4
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash "$RUNNER_TEMP/v974-api35.sh"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: step8-v974-api35-runtime
+          path: |
+            ${{ runner.temp }}/v974-api35-start.txt
+            ${{ runner.temp }}/v974-ready.xml
+            ${{ runner.temp }}/v974-zoom.xml
+            ${{ runner.temp }}/v974-list.xml
+            ${{ runner.temp }}/v974-api35-logcat.txt
+            ${{ runner.temp }}/v974-api35.png
+          if-no-files-found: ignore
+          retention-days: 3
+
+  api23-runtime:
+    needs: audit-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: step8-v974-apk
+          path: ${{ runner.temp }}/apk
+      - name: Enable KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Prepare API 23 compatibility verifier
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/v974-api23.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          APK="$RUNNER_TEMP/apk/JobBubble-V9.4.74-debug.apk"
+          adb wait-for-device; adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb install -r "$APK"
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'|sort -V|tail -n1); AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          ACT=$("$AAPT" dump badging "$APK"|sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p"); test -n "$ACT"
+          adb logcat -c; adb shell am start -W -n "com.jobbubble.app/$ACT" | tee "$RUNNER_TEMP/v974-api23-start.txt"; sleep 8
+          adb shell pidof com.jobbubble.app > "$RUNNER_TEMP/v974-api23-pid.txt" || true; test -s "$RUNNER_TEMP/v974-api23-pid.txt"
+          adb logcat -d -v threadtime > "$RUNNER_TEMP/v974-api23-logcat.txt"
+          ! grep -E 'FATAL EXCEPTION|ANR in com\.jobbubble\.app|Resources\$NotFoundException' "$RUNNER_TEMP/v974-api23-logcat.txt"
+          adb exec-out screencap -p > "$RUNNER_TEMP/v974-api23.png"
+          echo 'PASS: V9.4.74 minSdk API 23 installed/launched without resource or fatal errors'
+          SH
+          chmod +x "$RUNNER_TEMP/v974-api23.sh"
+      - uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 23
+          arch: x86
+          target: google_apis
+          profile: pixel_2
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          disk-size: 3072M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash "$RUNNER_TEMP/v974-api23.sh"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: step8-v974-api23-runtime
+          path: |
+            ${{ runner.temp }}/v974-api23-start.txt
+            ${{ runner.temp }}/v974-api23-pid.txt
+            ${{ runner.temp }}/v974-api23-logcat.txt
+            ${{ runner.temp }}/v974-api23.png
+          if-no-files-found: ignore
+          retention-days: 3
