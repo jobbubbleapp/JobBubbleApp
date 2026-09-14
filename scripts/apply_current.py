@@ -40,6 +40,7 @@ steps = [
     'v972_cluster_split_animation.py',
     'v973_api_qualified_system_bars.py',
     'v974_sync_android_version.py',
+    'v975_unit_testable_job_logic.py',
 ]
 
 for script in steps:
