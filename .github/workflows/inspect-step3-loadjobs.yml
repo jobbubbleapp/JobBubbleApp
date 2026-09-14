@@ -1,0 +1,32 @@
+name: Inspect JobBubble Step 3 Request Lifecycle
+
+on:
+  push:
+    branches:
+      - feature/code-cleanup-v948
+    paths:
+      - '.github/workflows/inspect-step3-loadjobs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect current generated request lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo '===== loadJobs ====='
+          grep -n -A180 -B20 'void loadJobs' "$MAIN" || true
+          echo '===== job request / async fields ====='
+          grep -n -E -A12 -B12 'loadJobs|request|HttpURLConnection|Executor|runOnUiThread|jobs\.clear|jobs\.add|allJobs|displayedJobs|fetchJobs' "$MAIN" | head -1200 || true
