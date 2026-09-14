@@ -41,6 +41,7 @@ steps = [
     'v973_api_qualified_system_bars.py',
     'v974_sync_android_version.py',
     'v975_unit_testable_job_logic.py',
+    'v976_accessibility_i18n.py',
 ]
 
 for script in steps:
