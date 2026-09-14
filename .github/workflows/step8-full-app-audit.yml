@@ -1,0 +1,225 @@
+name: Step 8 Full Android Audit
+
+on:
+  push:
+    branches: [feature/code-cleanup-v948]
+    paths:
+      - '.github/workflows/step8-full-app-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Inventory every tracked repository file
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files > /tmp/app-tracked-files.txt
+          echo "Tracked files: $(wc -l < /tmp/app-tracked-files.txt)"
+
+      - name: Check tracked text files for corruption and merge markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,pathlib
+          files=[x.decode() for x in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if x]
+          text_ext={'.py','.yml','.yaml','.json','.md','.txt','.xml','.properties','.gradle','.kts','.toml','.java','.kt','.sh'}
+          bad=[]
+          for f in files:
+              p=pathlib.Path(f); b=p.read_bytes()
+              if p.suffix.lower() in text_ext or p.name in {'.gitignore'}:
+                  if b'\x00' in b: bad.append(f'NUL byte in {f}'); continue
+                  try:s=b.decode('utf-8')
+                  except UnicodeDecodeError as e: bad.append(f'Invalid UTF-8 in {f}: {e}'); continue
+                  for m in ('<<<<<<< ','=======\n','>>>>>>> '):
+                      if m in s: bad.append(f'Merge conflict marker in {f}: {m.strip()}')
+          if bad:
+              print('\n'.join(bad)); raise SystemExit(1)
+          print('PASS: tracked text files have no corruption/conflict markers')
+          PY
+
+      - name: Compile every repository Python patch script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,py_compile
+          fs=[x.decode() for x in subprocess.check_output(['git','ls-files','-z','*.py']).split(b'\0') if x]
+          for f in fs: py_compile.compile(f,doraise=True)
+          print(f'PASS: py_compile on {len(fs)} Python files')
+          PY
+
+      - name: Parse every repository YAML and JSON file
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; files=`git ls-files "*.yml" "*.yaml"`.lines.map(&:strip); files.each{|f| YAML.load_file(f, aliases: true)}; puts "PASS: YAML parsed for #{files.length} files"'
+          python3 - <<'PY'
+          import subprocess,json
+          fs=[x.decode() for x in subprocess.check_output(['git','ls-files','-z','*.json']).split(b'\0') if x]
+          for f in fs:
+              with open(f,encoding='utf-8') as h:json.load(h)
+          print(f'PASS: JSON parsed for {len(fs)} files')
+          PY
+
+      - name: Validate every JobBubble source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          while IFS= read -r -d '' z; do
+            unzip -tq "$z"
+            count=$((count+1))
+          done < <(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -print0)
+          test "$count" -ge 1
+          echo "PASS: unzip integrity on $count source ZIP(s)"
+
+      - name: Materialize current Android source
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name 'JobBubble-*.zip' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/jb"
+          GRADLEW=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          test -n "$GRADLEW"
+          P=$(dirname "$GRADLEW")
+          python3 scripts/apply_current.py "$P"
+          test -f "$P/VERSION.txt"
+          test "$(cat "$P/VERSION.txt" | tr -d '\r\n ')" = '9.4.72'
+          echo "project_dir=$P" >> "$GITHUB_OUTPUT"
+          find "$P" -type f | sort > /tmp/materialized-files.txt
+          echo "Materialized files: $(wc -l < /tmp/materialized-files.txt)"
+
+      - name: Audit all materialized text/source/config files
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,pathlib,xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['PROJECT_DIR'])
+          text_ext={'.java','.kt','.xml','.json','.gradle','.kts','.properties','.pro','.txt','.md'}
+          bad=[]; xml_count=0; text_count=0
+          for p in root.rglob('*'):
+              if not p.is_file() or any(x in p.parts for x in ('.gradle','build')): continue
+              if p.suffix.lower() not in text_ext and p.name not in {'gradlew','settings.gradle','build.gradle'}: continue
+              b=p.read_bytes(); text_count+=1
+              if b'\x00' in b: bad.append(f'NUL byte: {p}'); continue
+              try:s=b.decode('utf-8')
+              except UnicodeDecodeError as e: bad.append(f'Invalid UTF-8: {p}: {e}'); continue
+              for marker in ('<<<<<<< ','=======\n','>>>>>>> '):
+                  if marker in s: bad.append(f'Merge marker: {p}: {marker.strip()}')
+              if p.suffix.lower()=='.xml':
+                  try: ET.parse(p); xml_count+=1
+                  except Exception as e: bad.append(f'Invalid XML: {p}: {e}')
+          if bad:
+              print('\n'.join(bad)); raise SystemExit(1)
+          print(f'PASS: audited {text_count} materialized text/config files; parsed {xml_count} XML files')
+          PY
+
+      - name: Verify critical current-source invariants
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN="$PROJECT_DIR/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          MANIFEST="$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          test -f "$MAIN" && test -f "$MANIFEST"
+          grep -Fq 'min_pay_hourly' "$MAIN"
+          grep -Fq 'showJobsLoading()' "$MAIN"
+          grep -Fq 'jobLoadGeneration' "$MAIN"
+          grep -Fq 'clusterSplitAnimationStart' "$MAIN"
+          grep -Fq 'showClusterSideList' "$MAIN"
+          grep -Fq 'com.google.android.geo.API_KEY' "$MANIFEST"
+          echo 'PASS: Step 1-4/current app invariants present'
+
+      - name: Inject Maps key
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_MAPS_API_KEY:-}"
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+          p=Path(os.environ['PROJECT_DIR']); key=escape(os.environ['GOOGLE_MAPS_API_KEY'],{'"':'&quot;'})
+          found=0
+          for m in p.rglob('src/main/AndroidManifest.xml'):
+              t=m.read_text()
+              if 'com.google.android.geo.API_KEY' in t:
+                  pat=re.compile(r'(<meta-data\s+[^>]*android:name=["\']com\.google\.android\.geo\.API_KEY["\'][^>]*android:value=["\'])[^"\']*(["\'][^>]*/?>)',re.S)
+                  t,n=pat.subn(r'\1'+key+r'\2',t,count=1)
+                  if n: found+=1; m.write_text(t)
+          assert found
+          print(f'PASS: Maps key injected into {found} manifest(s)')
+          PY
+
+      - name: Gradle configuration and dependency resolution
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --max-workers=2 tasks >/tmp/gradle-tasks.txt
+          ./gradlew --no-daemon --max-workers=2 app:dependencies --configuration debugRuntimeClasspath >/tmp/gradle-dependencies.txt
+
+      - name: Compile, unit-test, lint, and assemble current app
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Dorg.gradle.vfs.watch=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug | tee /tmp/gradle-check.log
+          APK=$(find . -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)
+          test -n "$APK" && test -s "$APK"
+          cp "$APK" /tmp/JobBubble-Step8-audited.apk
+          echo 'PASS: tests, lint, and debug APK build completed'
+
+      - name: Inspect generated APK package and manifest
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n1)
+          AAPT="$ANDROID_HOME/build-tools/$BT/aapt"
+          "$AAPT" dump badging /tmp/JobBubble-Step8-audited.apk | tee /tmp/apk-badging.txt
+          grep -Fq "package: name='com.jobbubble.app'" /tmp/apk-badging.txt
+          grep -Fq 'launchable-activity:' /tmp/apk-badging.txt
+          echo 'PASS: APK package and launch activity valid'
+
+      - name: Upload Android Step 8 audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step8-android-audit
+          path: |
+            /tmp/app-tracked-files.txt
+            /tmp/materialized-files.txt
+            /tmp/gradle-tasks.txt
+            /tmp/gradle-dependencies.txt
+            /tmp/gradle-check.log
+            /tmp/apk-badging.txt
+            /tmp/JobBubble-Step8-audited.apk
+          if-no-files-found: ignore
+          retention-days: 3
