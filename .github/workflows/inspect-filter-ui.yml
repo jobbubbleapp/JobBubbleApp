@@ -26,8 +26,7 @@ jobs:
           P=$(dirname "$GRADLEW")
           python3 scripts/apply_current.py "$P"
           MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
-          echo '===== request/filter methods ====='
-          grep -n -A45 -B5 'private String buildJobRequestUrl' "$MAIN" || true
-          grep -n -A30 -B5 'private String backendSourceParam' "$MAIN" || true
-          grep -n -A70 -B5 'private void applyFilters' "$MAIN" || true
-          grep -n -A35 -B5 'private void refreshForRangeChange' "$MAIN" || true
+          echo '===== job category parsing ====='
+          grep -n -A90 -B10 'static Job from' "$MAIN" || true
+          grep -n -A70 -B5 'categoryFor' "$MAIN" || true
+          grep -n -A70 -B5 'infer.*Category' "$MAIN" || true
