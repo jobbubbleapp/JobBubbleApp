@@ -42,6 +42,7 @@ steps = [
     'v974_sync_android_version.py',
     'v975_unit_testable_job_logic.py',
     'v976_accessibility_i18n.py',
+    'v977_remove_unused_resources.py',
 ]
 
 for script in steps:
