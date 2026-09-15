@@ -1,0 +1,36 @@
+name: Inspect Step 10 Color and Login
+
+on:
+  push:
+    branches: [feature/step10-color-login]
+    paths:
+      - '.github/workflows/inspect-step10-color-login.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize and inspect current app
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/jb"; mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); test -n "$G"; P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P"
+          MAIN="$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo '===== VERSION ====='; cat "$P/VERSION.txt"
+          echo '===== FILTER / DIALOG METHODS ====='
+          grep -n -E -A100 -B15 'show.*(Distance|Source|Category|Search|List)|Job source|Job category|Distance|All sources|All jobs' "$MAIN" | head -n 2200 || true
+          echo '===== COLOR CONSTANTS / HEX ====='
+          grep -n -E 'Color\.|#[0-9A-Fa-f]{6,8}|setBackgroundColor|setTextColor|GradientDrawable' "$MAIN" | head -n 1200 || true
+          echo '===== GOOGLE SIGN-IN ====='
+          grep -n -E -A80 -B20 'GoogleSignIn|Google sign|Sign in with Google|Continue with Google|googleSign|firebaseAuth|Continue as Guest' "$MAIN" | head -n 1200 || true
+          echo '===== RELEVANT XML FILES ====='
+          grep -RIn -E 'Job source|Job category|Distance|All sources|All jobs|Google|Guest|Search|List' "$P/app/src/main/res" | head -n 1200 || true
+          echo '===== COLORS.XML ====='
+          for f in $(find "$P/app/src/main/res" -name 'colors.xml' -o -name 'styles.xml'); do echo "--- $f"; cat "$f"; done
