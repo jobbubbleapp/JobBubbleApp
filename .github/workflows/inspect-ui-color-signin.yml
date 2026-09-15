@@ -25,43 +25,25 @@ jobs:
           P=$(dirname "$GRADLEW")
           python3 scripts/apply_current.py "$P"
           echo "P=$P" >> "$GITHUB_ENV"
-      - name: Inspect relevant source
+      - name: Inspect exact styling targets
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import os,re
+          import os
           p=Path(os.environ['P'])
           main=p/'app/src/main/java/com/jobbubble/app/MainActivity.java'
-          text=main.read_text(encoding='utf-8')
-          lines=text.splitlines()
-          keys=[
-            'showCategory','showSource','showSearch','showList','List','sourceChip','categoryChip',
-            'GoogleSignIn','googleSign','Continue with Google','Sign in with Google','signin','signIn',
-            'BottomSheetDialog','AlertDialog','roundStrokeBg','isLightUi','distance'
-          ]
-          hits=[]
-          for i,line in enumerate(lines):
-            if any(k in line for k in keys):
-              hits.append(i)
-          keep=[]
-          last=-99
-          for i in hits:
-            if i-last>4:
-              keep.append(i)
-            last=i
-          print('VERSION', (p/'VERSION.txt').read_text().strip())
-          print('MAIN',main)
-          for i in keep:
-            a=max(0,i-5); b=min(len(lines),i+8)
-            print(f'\n--- lines {a+1}-{b} ---')
-            for n in range(a,b): print(f'{n+1:05d}: {lines[n]}')
-          print('\n--- layout files mentioning google/sign/category/source/search/list ---')
-          for f in sorted((p/'app/src/main/res').rglob('*.xml')):
-            t=f.read_text(encoding='utf-8',errors='ignore')
-            if re.search(r'google|sign.?in|category|source|search|list',t,re.I):
-              print('\nFILE',f.relative_to(p))
-              for n,line in enumerate(t.splitlines(),1):
-                if re.search(r'google|sign.?in|category|source|search|list',line,re.I): print(f'{n:04d}: {line}')
+          lines=main.read_text(encoding='utf-8').splitlines()
+          for a,b in [(1406,1502),(2870,2940)]:
+              print(f'\n=== MainActivity {a}-{b} ===')
+              for n in range(a-1,min(b,len(lines))): print(f'{n+1:05d}: {lines[n]}')
+          for rel in [
+              'app/src/main/res/drawable/welcome_google_button.xml',
+              'app/src/main/res/layout/activity_auth.xml',
+              'app/src/main/res/layout/activity_welcome.xml',
+          ]:
+              f=p/rel
+              print(f'\n=== {rel} ===')
+              print(f.read_text(encoding='utf-8'))
           PY
