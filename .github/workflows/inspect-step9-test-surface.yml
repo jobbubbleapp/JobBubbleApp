@@ -1,0 +1,40 @@
+name: Inspect Step 9 Test Surface
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - '.github/workflows/inspect-step9-test-surface.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize current Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"
+          unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit)
+          test -n "$G"
+          P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P"
+          echo "P=$P" >> "$GITHUB_ENV"
+      - name: Inspect exact testable production logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '--- app/build.gradle ---'
+          cat "$P/app/build.gradle"
+          echo '--- backend/category/source/where methods ---'
+          sed -n '1740,1895p' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo '--- distance helper ---'
+          sed -n '2458,2478p' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"
+          echo '--- Job parser ---'
+          sed -n '3260,3285p' "$P/app/src/main/java/com/jobbubble/app/MainActivity.java"

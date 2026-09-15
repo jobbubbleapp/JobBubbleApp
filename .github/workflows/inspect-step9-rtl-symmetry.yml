@@ -1,0 +1,39 @@
+name: Inspect Step 9 RTL Symmetry
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - '.github/workflows/inspect-step9-rtl-symmetry.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize and inspect relative padding
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" >/dev/null
+          python3 - "$P" <<'PY'
+          import pathlib,re,sys
+          root=pathlib.Path(sys.argv[1])/'app/src/main/res/layout'
+          for p in sorted(root.glob('*.xml')):
+              s=p.read_text()
+              for m in re.finditer(r'<[^>]+>',s,re.S):
+                  tag=m.group(0)
+                  starts=re.findall(r'android:(paddingStart|paddingEnd|paddingLeft|paddingRight)="([^"]+)"',tag)
+                  if starts:
+                      vals=dict(starts)
+                      if ('paddingStart' in vals) != ('paddingEnd' in vals):
+                          line=s.count('\n',0,m.start())+1
+                          print(f'{p.name}:{line}: {vals}')
+                          print(' '.join(tag.split())[:700])
+          PY

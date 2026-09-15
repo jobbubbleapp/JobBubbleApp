@@ -1,0 +1,30 @@
+name: Inspect Step 9 Dependency Surface
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - '.github/workflows/inspect-step9-dependency-surface.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize and inspect dependency APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P" >/dev/null
+          echo '--- current dependency declarations ---'
+          grep -nE "implementation|testImplementation|compileSdk|minSdk|targetSdk" "$P/app/build.gradle"
+          echo '--- legacy Google Sign-In API usage ---'
+          grep -RInE 'GoogleSignIn|GoogleSignInClient|GoogleSignInOptions|Auth\.GOOGLE_SIGN_IN_API' "$P/app/src/main/java" || true
+          echo '--- Maps legacy-library safeguard ---'
+          grep -RIn 'org.apache.http.legacy' "$P/app/src/main" || true

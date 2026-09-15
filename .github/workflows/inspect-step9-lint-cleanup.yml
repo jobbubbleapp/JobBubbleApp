@@ -1,0 +1,57 @@
+name: Inspect Step 9 Lint Cleanup
+
+on:
+  push:
+    branches: [feature/step9-cleanup-testing]
+    paths:
+      - '.github/workflows/inspect-step9-lint-cleanup.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Materialize and lint V9.4.75
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jb"; unzip -q JobBubble-V9.4.41-RESET-BUTTON.zip -d "$RUNNER_TEMP/jb"
+          G=$(find "$RUNNER_TEMP/jb" -type f -name gradlew -print -quit); P=$(dirname "$G")
+          python3 scripts/apply_current.py "$P"
+          cd "$P"; chmod +x gradlew; ./gradlew --no-daemon --max-workers=2 lintDebug >/tmp/step9-lint-gradle.txt
+          R=$(find app/build -name lint-results-debug.txt -print -quit); cp "$R" /tmp/step9-lint.txt
+          python3 - <<'PY'
+          import collections,re
+          text=open('/tmp/step9-lint.txt',encoding='utf-8').read().splitlines()
+          counts=collections.Counter()
+          samples={}
+          for line in text:
+              m=re.search(r'\[([^\]]+)\]\s*$',line)
+              if m:
+                  counts[m.group(1)]+=1
+                  samples.setdefault(m.group(1),[]).append(line)
+          print('--- LINT WARNING COUNTS ---')
+          for k,v in counts.most_common(): print(f'{v:4d} {k}')
+          focus={'HardcodedText','ContentDescription','SpeakableTextPresentCheck','TouchTargetSizeCheck','RtlHardcoded','RtlSymmetry','RtlEnabled','UnusedResources','GradleDependency','OldTargetApi','ObsoleteSdkInt'}
+          print('--- FOCUSED SAMPLES ---')
+          for k in sorted(focus):
+              if k in samples:
+                  print(f'### {k} ({counts[k]})')
+                  for x in samples[k][:40]: print(x)
+          open('/tmp/step9-lint-summary.txt','w').write('\n'.join(f'{v} {k}' for k,v in counts.most_common())+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step9-lint-inventory
+          path: |
+            /tmp/step9-lint.txt
+            /tmp/step9-lint-summary.txt
+          retention-days: 3
