@@ -28,7 +28,12 @@ def edit_block(source: str, start_anchor: str, end_anchor: str, changes, label: 
         raise SystemExit(f"{label}: start anchor missing: {start_anchor}")
     end = source.find(end_anchor, start + len(start_anchor))
     if end < 0:
-        raise SystemExit(f"{label}: end anchor missing: {end_anchor}")
+        # Some older generated methods have a different return type/name immediately
+        # after the target method. Fall back to the next private method boundary.
+        m = re.search(r"\n\s{4}private\s+", source[start + len(start_anchor):])
+        if not m:
+            raise SystemExit(f"{label}: could not locate next method boundary")
+        end = start + len(start_anchor) + m.start()
     block = source[start:end]
     for old, new in changes:
         block = replace_once(block, old, new, label)
