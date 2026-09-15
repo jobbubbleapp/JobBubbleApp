@@ -62,28 +62,24 @@ jobs:
           assert "versionName '9.4.81'" in build
           assert re.search(r'targetSdk(?:Version)?\s+35\b',build)
 
-          def method(name,next_name=None):
-              start=main.index('private ', main.index(name)-80)
-              if next_name:
-                  end=main.index(next_name,start+1)
-              else:
-                  m=re.search(r'\n\s*private\s+',main[start+20:])
-                  end=start+20+m.start() if m else len(main)
+          def method(signature):
+              start=main.index(signature)
+              tail=main[start+len(signature):]
+              m=re.search(r'\n\s{4}private\s+',tail)
+              end=start+len(signature)+m.start() if m else len(main)
               return main[start:end]
 
-          choice=method('showChoiceMenu','private String choiceIcon')
-          for color in ('#0B1A29','#0E2132','#10283A','#31546C','#2196F3','#F4F8FC','#8FA7BA','#526A7E'):
-              if color == '#526A7E':
-                  continue
+          choice=method('    private void showChoiceMenu(')
+          for color in ('#0B1A29','#0E2132','#10283A','#31546C','#2196F3','#F4F8FC','#8FA7BA'):
               assert color in choice, f'missing choice-menu blue color {color}'
           for old in ('#0C051F','#100921','#24103D','#2B1B45','#7336B5','#B56DFF','#6E2FA4','#1B0D31','#663399','#1A0D2C','#4B2A70','#B7A8DD','#E9DFFF','#160B28','#6B3BA0','#5A169A','#7A1CC7'):
               assert old not in choice, f'old purple choice color remains: {old}'
 
-          row=method('addModernJobRow','private LinearLayout modernListShell')
-          shell=method('modernListShell','private void showJobList')
-          joblist=method('showJobList','private void rebuildSearchRows')
-          searchrows=method('rebuildSearchRows','private void showSearchDialog')
-          search=method('showSearchDialog','private void showProfile')
+          row=method('    private void addModernJobRow(')
+          shell=method('    private LinearLayout modernListShell(')
+          joblist=method('    private void showJobList(')
+          searchrows=method('    private void rebuildSearchRows(')
+          search=method('    private void showSearchDialog(')
           combined=row+shell+joblist+searchrows+search
           for color in ('#0B1A29','#0E2132','#10283A','#31546C','#2196F3','#F4F8FC','#8FA7BA','#6F879A','#526A7E'):
               assert color in combined, f'missing search/list blue color {color}'
