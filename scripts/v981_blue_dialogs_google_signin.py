@@ -18,8 +18,21 @@ text = main.read_text(encoding="utf-8")
 def replace_once(source: str, old: str, new: str, label: str) -> str:
     count = source.count(old)
     if count != 1:
-        raise SystemExit(f"{label}: expected exactly one match, found {count}")
+        raise SystemExit(f"{label}: expected exactly one match, found {count}: {old}")
     return source.replace(old, new, 1)
+
+
+def edit_block(source: str, start_anchor: str, end_anchor: str, changes, label: str) -> str:
+    start = source.find(start_anchor)
+    if start < 0:
+        raise SystemExit(f"{label}: start anchor missing: {start_anchor}")
+    end = source.find(end_anchor, start + len(start_anchor))
+    if end < 0:
+        raise SystemExit(f"{label}: end anchor missing: {end_anchor}")
+    block = source[start:end]
+    for old, new in changes:
+        block = replace_once(block, old, new, label)
+    return source[:start] + block + source[end:]
 
 
 # Job category / source chooser: dark mode only. Layout, dimensions, text, icons,
@@ -41,29 +54,39 @@ choice_changes = [
     ('roundStrokeBg(light?"#F3F4F6":"#160B28",light?"#B8BCC3":"#6B3BA0",16,1)', 'roundStrokeBg(light?"#F3F4F6":"#10283A",light?"#B8BCC3":"#31546C",16,1)'),
     ('new int[]{Color.parseColor(light?"#7434C8":"#5A169A"),Color.parseColor(light?"#9D35E8":"#7A1CC7")}', 'new int[]{Color.parseColor(light?"#7434C8":"#168CF0"),Color.parseColor(light?"#9D35E8":"#2196F3")}'),
 ]
-for old, new in choice_changes:
-    text = replace_once(text, old, new, "choice menu color")
+text = edit_block(text, '    private void showChoiceMenu(', '    private String choiceIcon(', choice_changes, 'choice menu color')
 
-# Search and List sheets: dark-mode colors only. No structure or behavior changes.
-list_search_changes = [
+# List row colors.
+text = edit_block(text, '    private void addModernJobRow(', '    private LinearLayout modernListShell(', [
     ('row.setBackground(roundStrokeBg(light?"#E3E5E8":"#110B25",light?"#C8CBD1":"#3B275B",16,1));', 'row.setBackground(roundStrokeBg(light?"#E3E5E8":"#0E2132",light?"#C8CBD1":"#31546C",16,1));'),
     ('TextView title=label(j.title,16,light?"#202329":"#F5F7FB",true);', 'TextView title=label(j.title,16,light?"#202329":"#F4F8FC",true);'),
     ('TextView company=label(j.company+"  •  "+money(distanceMiles(userLat,userLon,j.lat,j.lon))+" mi",12,light?"#656B75":"#A99CC9",false);', 'TextView company=label(j.company+"  •  "+money(distanceMiles(userLat,userLon,j.lat,j.lon))+" mi",12,light?"#656B75":"#8FA7BA",false);'),
     ('TextView arrow=label("›",28,light?"#6B3AA5":"#B98CFF",false);', 'TextView arrow=label("›",28,light?"#6B3AA5":"#2196F3",false);'),
+], 'list row color')
+
+# Shared Search/List bottom-sheet shell.
+text = edit_block(text, '    private LinearLayout modernListShell(', '    private void showJobList(', [
     ('box.setBackground(roundStrokeBg(light?"#E9EAED":"#0B0717",light?"#C9CCD2":"#3F2463",28,1));', 'box.setBackground(roundStrokeBg(light?"#E9EAED":"#0B1A29",light?"#C9CCD2":"#31546C",28,1));'),
     ('handle.setBackground(roundBg(light?"#A9ADB4":"#73519C",10));', 'handle.setBackground(roundBg(light?"#A9ADB4":"#526A7E",10));'),
     ('TextView title=label(titleText,23,light?"#202329":"#F8F6FF",true);', 'TextView title=label(titleText,23,light?"#202329":"#F4F8FC",true);'),
     ('TextView sub=label(subtitle,13,light?"#676D76":"#A99CC9",false);', 'TextView sub=label(subtitle,13,light?"#676D76":"#8FA7BA",false);'),
+], 'list shell color')
+
+text = edit_block(text, '    private void showJobList(', '    private void rebuildSearchRows(', [
     ('close.setBackground(roundStrokeBg(isLightUi()?"#DFE1E5":"#17102C",isLightUi()?"#BFC3CA":"#6E3DA8",14,1));', 'close.setBackground(roundStrokeBg(isLightUi()?"#DFE1E5":"#10283A",isLightUi()?"#BFC3CA":"#31546C",14,1));'),
+], 'list close color')
+
+text = edit_block(text, '    private void rebuildSearchRows(', '    private void showSearchDialog(', [
     ('isLightUi()?"#5D636C":"#A99CC9"', 'isLightUi()?"#5D636C":"#8FA7BA"'),
+], 'search empty-state color')
+
+text = edit_block(text, '    private void showSearchDialog(', '    private void showProfile(', [
     ('search.setHintTextColor(Color.parseColor(isLightUi()?"#858B94":"#80739A"));', 'search.setHintTextColor(Color.parseColor(isLightUi()?"#858B94":"#6F879A"));'),
     ('search.setTextColor(Color.parseColor(isLightUi()?"#202329":"#F5F2FB"));', 'search.setTextColor(Color.parseColor(isLightUi()?"#202329":"#F4F8FC"));'),
     ('search.setBackground(roundStrokeBg(isLightUi()?"#DFE1E5":"#100A20",isLightUi()?"#BFC3CA":"#55327B",18,1));', 'search.setBackground(roundStrokeBg(isLightUi()?"#DFE1E5":"#0E2132",isLightUi()?"#BFC3CA":"#31546C",18,1));'),
     ('TextView nearby=label(maxDistanceMiles+" mi",13,isLightUi()?"#4C2E72":"#CCB4F5",true);', 'TextView nearby=label(maxDistanceMiles+" mi",13,isLightUi()?"#4C2E72":"#F4F8FC",true);'),
     ('nearby.setBackground(roundStrokeBg(isLightUi()?"#E4E5E8":"#17102C",isLightUi()?"#C7BDD3":"#6D3FC3",15,1));', 'nearby.setBackground(roundStrokeBg(isLightUi()?"#E4E5E8":"#10283A",isLightUi()?"#C7BDD3":"#31546C",15,1));'),
-]
-for old, new in list_search_changes:
-    text = replace_once(text, old, new, "search/list color")
+], 'search dialog color')
 
 main.write_text(text, encoding="utf-8")
 
